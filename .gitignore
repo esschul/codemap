@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+
+appmap.html
+architecture.md
+vis-network.min.js
+
+ast_scanner/target/classes/
+ast_scanner/target/generated-sources/
+ast_scanner/target/maven-archiver/
+ast_scanner/target/maven-status/
+ast_scanner/target/*.jar.original
+ast_scanner/target/ast-scanner-*.jar

@@ -83,10 +83,19 @@ public class Scanner {
 
                 String className = cls.getNameAsString();
                 List<String> anns = annotations(cls);
+                boolean injectFinalFields = anns.contains("RequiredArgsConstructor")
+                    || anns.contains("AllArgsConstructor");
 
-                // Collect fields declared in the class body
+                // Collect injected fields declared in the class body. Ordinary
+                // state fields are not architectural dependencies.
                 Map<String, String> fieldTypes = new LinkedHashMap<>();
                 for (FieldDeclaration fd : cls.getFields()) {
+                    boolean injectedField = fd.getAnnotations().stream()
+                        .map(a -> a.getNameAsString())
+                        .anyMatch(a -> a.equals("Autowired") || a.equals("Inject"));
+                    if (!injectedField && !(injectFinalFields && fd.isFinal())) {
+                        continue;
+                    }
                     String typeName = simpleTypeName(fd.getElementType());
                     if (SKIP_TYPES.contains(typeName)) continue;
                     for (VariableDeclarator vd : fd.getVariables()) {

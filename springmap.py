@@ -163,6 +163,30 @@ def _annotation_path(ann_text: str) -> str:
     return m.group(1) if m else ''
 
 
+def _html_escape(value: object) -> str:
+    """Escape text before embedding it in HTML/JS template literals."""
+    return (
+        str(value)
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace("'", '&#39;')
+    )
+
+
+def _json_for_script(value: object) -> str:
+    """Serialize JSON safely for inline <script> blocks."""
+    return (
+        json.dumps(value)
+        .replace('&', '\\u0026')
+        .replace('<', '\\u003c')
+        .replace('>', '\\u003e')
+        .replace('\u2028', '\\u2028')
+        .replace('\u2029', '\\u2029')
+    )
+
+
 def _kotlin_constructor_fields(text: str, class_pos: int) -> dict[str, str]:
     """Return {fieldName: TypeName} from Kotlin primary constructor."""
     win = text[class_pos:]
@@ -577,20 +601,24 @@ def _extract_endpoints(text: str, class_pos: int, base_path: str,
     )
 
     seen: set[str] = set()
+    previous_method_start = 0
     endpoints: list[Endpoint] = []
 
     for m in method_re.finditer(body):
         handler = m.group('kfn') or m.group('jfn')
         if not handler or handler in seen:
+            previous_method_start = m.start()
             continue
         # Skip obvious non-handler names
         if handler in ('if', 'for', 'while', 'when', 'return', 'val', 'var',
                        'class', 'object', 'companion', 'else', 'try', 'catch'):
+            previous_method_start = m.start()
             continue
 
-        # Look backward up to 30 000 chars for an HTTP mapping annotation
-        # that hasn't already been consumed by an earlier method
-        lookback_start = max(0, m.start() - 30_000)
+        # Look backward only to the previous method declaration. This allows
+        # Swagger/OpenAPI annotations between the mapping and method, but
+        # prevents reusing one mapping annotation for later helper methods.
+        lookback_start = previous_method_start
         lookback = body[lookback_start:m.start()]
 
         http_method: Optional[str] = None
@@ -603,6 +631,7 @@ def _extract_endpoints(text: str, class_pos: int, base_path: str,
                 ann_body_str = am.group('ann_body') or ''
 
         if http_method is None:
+            previous_method_start = m.start()
             continue
 
         seen.add(handler)
@@ -620,6 +649,7 @@ def _extract_endpoints(text: str, class_pos: int, base_path: str,
             handler=handler,
             calls=calls,
         ))
+        previous_method_start = m.start()
 
     return endpoints
 
@@ -1000,12 +1030,12 @@ def generate_html(components: list[Component], title: str = 'Application Map') -
     stats = f'{n_ctrl} controllers · {n_svc} services · {n_repo} repos · {n_cli} clients · {total_ep} endpoints'
 
     html = HTML_TEMPLATE
-    html = html.replace('{{TITLE}}', title)
-    html = html.replace('{{STATS}}', stats)
-    html = html.replace('{{GRAPH_NODES}}', json.dumps(nodes))
-    html = html.replace('{{GRAPH_EDGES}}', json.dumps(edges))
-    html = html.replace('{{SIDEBAR_DATA}}', json.dumps(sidebar))
-    html = html.replace('{{COMP_DATA}}', json.dumps(comp_lut))
+    html = html.replace('{{TITLE}}', _html_escape(title))
+    html = html.replace('{{STATS}}', _html_escape(stats))
+    html = html.replace('{{GRAPH_NODES}}', _json_for_script(nodes))
+    html = html.replace('{{GRAPH_EDGES}}', _json_for_script(edges))
+    html = html.replace('{{SIDEBAR_DATA}}', _json_for_script(sidebar))
+    html = html.replace('{{COMP_DATA}}', _json_for_script(comp_lut))
     return html
 
 
@@ -1326,6 +1356,15 @@ const EDGES_RAW   = {{GRAPH_EDGES}};
 const SIDEBAR_RAW = {{SIDEBAR_DATA}};
 const COMP        = {{COMP_DATA}};
 
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── Chain SVG renderer ────────────────────────────────────────────────────────
 const KIND_COLOR = {
   CONTROLLER: {bg:'#1d4ed8', border:'#60a5fa', text:'#fff'},
@@ -1491,18 +1530,18 @@ function renderSidebar(q=''){
     const grp = document.createElement('div');
     grp.className='ctrl-group';
     grp.innerHTML=`<div class="ctrl-header">
-      ${ctrl.controller}
-      ${ctrl.domain?`<span class="domain-chip">${ctrl.domain}</span>`:''}
+      ${escHtml(ctrl.controller)}
+      ${ctrl.domain?`<span class="domain-chip">${escHtml(ctrl.domain)}</span>`:''}
     </div><div class="ep-list"></div>`;
     sb.appendChild(grp);
     const list = grp.querySelector('.ep-list');
     eps.forEach(ep => {
       const item = document.createElement('div');
       item.className='ep-item';
-      item.innerHTML=`<span class="method m-${ep.method}">${ep.method}</span>
+      item.innerHTML=`<span class="method m-${escHtml(ep.method)}">${escHtml(ep.method)}</span>
         <div style="display:flex;flex-direction:column;gap:1px;min-width:0">
-          <span class="ep-path">${ep.path}</span>
-          <span style="font-size:10px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace">${ep.handler}()</span>
+          <span class="ep-path">${escHtml(ep.path)}</span>
+          <span style="font-size:10px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace">${escHtml(ep.handler)}()</span>
         </div>`;
       item.addEventListener('click',()=>selectEndpoint(ctrl.controller,ep,item));
       list.appendChild(item);
@@ -1526,8 +1565,8 @@ function selectEndpoint(ctrlName, ep, itemEl){
   const noCallsNote = !ep.calls.length
     ? '<span style="opacity:.5;font-size:11px">— no service calls detected in handler body</span>' : '';
   panel.innerHTML=`<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-    <span class="method m-${ep.method}" style="font-size:10px">${ep.method}</span>
-    <code style="font-size:13px;color:var(--text)">${ep.path}</code>
+    <span class="method m-${escHtml(ep.method)}" style="font-size:10px">${escHtml(ep.method)}</span>
+    <code style="font-size:13px;color:var(--text)">${escHtml(ep.path)}</code>
     ${noCallsNote}
   </div>`;
 }
