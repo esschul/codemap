@@ -17,21 +17,19 @@ It works without project annotations, and can optionally enrich output from `@Ap
 
 ## Quick Start
 
-From a Spring Boot repository:
+Run from the root of any Spring Boot repository — source root is detected automatically:
 
 ```bash
-python3 /path/to/codemap/springmap.py src/main \
-  --title "My Application Architecture" \
-  --serve
+python3 /path/to/codemap/springmap.py . --serve
 ```
 
-With `--serve`, codemap writes the HTML to a fixed internal serve directory, starts a local server, and opens:
+Opens `http://localhost:8742/` in your browser. Also writes `architecture.md` in the current directory.
 
-```text
-http://localhost:8742/
+Pass `--title` to label the map:
+
+```bash
+python3 /path/to/codemap/springmap.py . --title "My App" --serve
 ```
-
-It also writes `architecture.md` in the current working directory.
 
 ## Install For Personal Use
 
