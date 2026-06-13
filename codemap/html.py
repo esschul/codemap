@@ -492,7 +492,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --hover:#0b1120;--active-outline:#1d4ed8;--chip-bg:#172554;
   --chip-border:#1e3a8a;--chip-text:#60a5fa;--input-bg:#0b1120;
   --scrollbar:#1f2937;--detail-label:#4b5563;--detail-val:#cbd5e1;
-  --arrow:#374151;
+  --arrow:#374151;--accent:#3b82f6;
 }
 body.light{
   --bg:#f1f5f9;--surface:#ffffff;--border:#e2e8f0;--text:#0f172a;
@@ -500,7 +500,7 @@ body.light{
   --hover:#f8fafc;--active-outline:#2563eb;--chip-bg:#dbeafe;
   --chip-border:#93c5fd;--chip-text:#1d4ed8;--input-bg:#f8fafc;
   --scrollbar:#cbd5e1;--detail-label:#94a3b8;--detail-val:#334155;
-  --arrow:#cbd5e1;
+  --arrow:#cbd5e1;--accent:#2563eb;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
@@ -641,7 +641,7 @@ body.light .k-MAPPER{background:#cffafe;color:#0e7490}
 #btn-theme:hover{background:var(--border)}
 
 /* Inspector column */
-.inspector{width:260px;flex-shrink:0;border-left:1px solid var(--border);
+.inspector{width:300px;flex-shrink:0;border-left:1px solid var(--border);
   background:var(--surface);display:flex;flex-direction:row;overflow:hidden;
   transition:width .2s ease}
 .inspector.collapsed{width:28px}
@@ -1055,7 +1055,7 @@ function renderChainSVG(ctrlName, ep) {
   const mc = methodColor[ep.method] || '#64748b';
   const title = `
     <rect x="0" y="0" width="${svgW}" height="44" fill="none"/>
-    <rect x="${PAD_X}" y="14" width="auto" height="24" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1"/>
+    <rect x="${PAD_X}" y="14" width="${ep.method.length * 7 + 16}" height="24" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1"/>
     <text x="${PAD_X + 8}" y="30" font-family="system-ui" font-size="11" font-weight="800" fill="${mc}">${ep.method}</text>
     <text x="${PAD_X + 8 + (ep.method.length * 7) + 6}" y="30" font-family="'SF Mono','Fira Code',monospace" font-size="12" fill="#94a3b8">${escXml(ep.path)}</text>
   `;
@@ -1262,17 +1262,25 @@ function renderSearch(q) {
 
 // ── Ollama discovery ──────────────────────────────────────────────────────────
 let ollamaModel = null;
+let ollamaReady = false;  // true once discovery finishes (model found or not)
+const ollamaReadyCallbacks = [];
+function onOllamaReady(fn) {
+  if (ollamaReady) fn(ollamaModel);
+  else ollamaReadyCallbacks.push(fn);
+}
 (async () => {
   try {
     const r = await fetch('http://localhost:11434/api/tags',
-      { signal: AbortSignal.timeout(600) });
-    if (!r.ok) return;
-    const data = await r.json();
-    const models = (data.models || []).map(m => m.name);
-    // Prefer larger/better models if available
-    const preferred = ['llama3', 'llama3.2', 'mistral', 'phi3', 'phi', 'gemma'];
-    ollamaModel = models.find(n => preferred.some(p => n.startsWith(p))) || models[0] || null;
+      { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const data = await r.json();
+      const models = (data.models || []).map(m => m.name);
+      const preferred = ['llama3', 'llama3.2', 'mistral', 'phi3', 'phi', 'gemma', 'qwen'];
+      ollamaModel = models.find(n => preferred.some(p => n.startsWith(p))) || models[0] || null;
+    }
   } catch { /* Ollama not running — silent */ }
+  ollamaReady = true;
+  ollamaReadyCallbacks.forEach(fn => fn(ollamaModel));
 })();
 
 function buildEvidencePrompt(ctrlName, ep) {
@@ -1299,11 +1307,15 @@ function buildEvidencePrompt(ctrlName, ep) {
 }
 
 async function summariseEndpoint(ctrlName, ep, outputEl) {
+  outputEl.textContent = '…';
+  if (!ollamaReady) {
+    await new Promise(resolve => onOllamaReady(() => resolve()));
+  }
   if (!ollamaModel) {
-    outputEl.textContent = 'Ollama not available (start with: ollama serve)';
+    outputEl.textContent = 'Ollama not available. Start it with: ollama serve';
     return;
   }
-  outputEl.textContent = '…';
+  outputEl.textContent = `Using ${ollamaModel}…`;
   try {
     const resp = await fetch('http://localhost:11434/api/generate', {
       method: 'POST',
@@ -1317,16 +1329,17 @@ async function summariseEndpoint(ctrlName, ep, outputEl) {
     outputEl.textContent = '';
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
+    let buffer = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      for (const line of dec.decode(value).split('\\n')) {
+      buffer += dec.decode(value, { stream: true });
+      const lines = buffer.split('\\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
         if (!line.trim()) continue;
-        try {
-          const chunk = JSON.parse(line);
-          if (chunk.response) outputEl.textContent += chunk.response;
-          if (chunk.done) break;
-        } catch { /* partial line */ }
+        const chunk = JSON.parse(line);
+        if (chunk.response) outputEl.textContent += chunk.response;
       }
     }
   } catch (e) {
@@ -1345,32 +1358,66 @@ function selectEndpoint(ctrlName, ep, itemEl){
   document.getElementById('chain-empty').classList.add('hidden');
 
   // Detail panel
+  // Bottom strip: just the endpoint path label
   const panel = document.getElementById('detail');
   panel.classList.remove('hidden');
   const noCallsNote = !ep.calls.length
     ? '<span style="opacity:.5;font-size:11px">— no service calls detected in handler body</span>' : '';
-  const hasEvidence = (ep.fieldCalls || []).length > 0;
-  const summariseBtn = hasEvidence
-    ? `<button id="btn-summarise" style="
-        margin-top:10px;padding:4px 10px;font-size:11px;cursor:pointer;
-        background:var(--accent);color:#fff;border:none;border-radius:4px">
-        ✦ Summarise
-       </button>
-       <div id="llm-output" style="
-        margin-top:8px;font-size:12px;line-height:1.6;color:var(--text);
-        white-space:pre-wrap;min-height:0"></div>`
-    : '';
   panel.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span class="method m-${escHtml(ep.method)}" style="font-size:10px">${escHtml(ep.method)}</span>
       <code style="font-size:13px;color:var(--text)">${escHtml(ep.path)}</code>
       ${noCallsNote}
-    </div>
-    ${summariseBtn}`;
+    </div>`;
+
+  // Inspector panel: show call evidence + Summarise button
+  const hasMethodEvidence = (ep.fieldCalls || []).length > 0;
+  const hasEvidence = hasMethodEvidence || (ep.calls || []).length > 0;
+  const callRows = (ep.fieldCalls || [])
+    .map(fc => `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
+      <span style="color:var(--text)">${escHtml(fc.field)}</span>.${escHtml(fc.method)}()
+      <span style="opacity:.5"> ${escHtml(fc.type)}</span>
+    </div>`).join('');
+  const summariseSection = hasEvidence ? `
+    <div style="margin-top:12px">
+      <button id="btn-summarise" style="
+        width:100%;padding:6px 0;font-size:11px;cursor:pointer;
+        background:var(--accent);color:#fff;border:none;border-radius:4px;
+        display:flex;align-items:center;justify-content:center;gap:6px">
+        ✦ Summarise with AI
+      </button>
+      <div id="llm-output" style="
+        margin-top:10px;font-size:12px;line-height:1.7;color:var(--text);
+        white-space:pre-wrap"></div>
+    </div>` : '';
+
+  const ndBody = document.getElementById('nd-body');
+  ndBody.innerHTML = `
+    <div style="padding:12px 14px">
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);
+                  text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+        ${escHtml(ep.method)} ${escHtml(ep.path)}
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">
+        handler: <code style="color:var(--text)">${escHtml(ctrlName)}.${escHtml(ep.handler)}()</code>
+      </div>
+      ${summariseSection}
+      ${hasMethodEvidence ? `<div style="font-size:10px;font-weight:700;color:var(--text-muted);
+        text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px">Calls</div>
+        ${callRows}` : '<div style="font-size:11px;color:var(--text-muted);opacity:.6;margin-top:8px">No method-call evidence found; summary will use endpoint and component evidence.</div>'}
+    </div>`;
+
+  // Expand inspector if collapsed
+  const insp = document.getElementById('inspector');
+  if (insp.classList.contains('collapsed')) insp.classList.remove('collapsed');
 
   if (hasEvidence) {
-    document.getElementById('btn-summarise').addEventListener('click', () => {
-      summariseEndpoint(ctrlName, ep, document.getElementById('llm-output'));
+    const btn = document.getElementById('btn-summarise');
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.style.opacity = '.6';
+      summariseEndpoint(ctrlName, ep, document.getElementById('llm-output'))
+        .finally(() => { if (btn.isConnected) { btn.disabled = false; btn.style.opacity = '1'; } });
     });
   }
 }

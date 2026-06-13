@@ -14,7 +14,7 @@ from .scan import scan
 from .resolve import resolve
 from .serve import run_once
 
-_SERVE_DIR = Path.home() / '.claude' / 'skills' / 'codemap' / 'serve'
+_SERVE_DIR = Path.home() / '.codemap' / 'serve'
 
 
 def _resolve_source_root(given: Path) -> Path:
