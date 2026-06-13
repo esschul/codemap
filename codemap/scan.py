@@ -738,7 +738,17 @@ def scan(root: Path) -> tuple[list[Component], list[str], int]:
     components: list[Component] = []
     warnings: list[str] = []
     parse_errors = 0
-    all_files = sorted(root.rglob('*.kt')) + sorted(root.rglob('*.java'))
+    kt_files = sorted(root.rglob('*.kt'))
+    java_files = sorted(root.rglob('*.java'))
+    all_files = kt_files + java_files
+    if not all_files:
+        import sys
+        print(
+            f'Error: no Kotlin or Java files found under {root}\n'
+            'codemap only supports Spring Boot (Kotlin/Java) projects.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
     for src_file in sorted(all_files, key=lambda p: str(p)):
         try:
             comp = parse_file(src_file)
