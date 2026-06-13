@@ -142,3 +142,10 @@ Rebuild the Java AST scanner after changing `ast_scanner/src/main/java/dev/codem
 mvn -q -f ast_scanner/pom.xml package
 cp ast_scanner/target/ast-scanner.jar codemap/ast-scanner.jar
 ```
+
+Rebuild the Kotlin AST scanner after changing `kt_scanner/src/main/java/dev/codemap/KtScanner.java`:
+
+```bash
+mvn -q -f kt_scanner/pom.xml package
+cp kt_scanner/target/kt-scanner.jar codemap/kt-scanner.jar
+```

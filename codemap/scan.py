@@ -302,27 +302,24 @@ def _infer_domain(package: str) -> str:
     return parts[-1] if parts else ''
 
 
-# ── Java AST scanner (JavaParser-backed) ─────────────────────────────────────
+# ── AST scanners ──────────────────────────────────────────────────────────────
 
-# Bundled JAR lives alongside this module (works both in-repo and when pip-installed)
+# Bundled JARs live alongside this module (works both in-repo and when pip-installed)
 _AST_JAR = Path(__file__).parent / 'ast-scanner.jar'
+_KT_JAR  = Path(__file__).parent / 'kt-scanner.jar'
 
 # Cache: file path → parsed result dict (or None on error)
 _ast_cache: dict[str, Optional[dict]] = {}
 
 
-def _ast_scan_files(java_paths: list[Path]) -> dict[str, dict]:
-    """
-    Invoke the JavaParser-based scanner on a batch of .java files.
-    Returns {file_path_str: result_dict}. Files that fail to parse are omitted.
-    Falls back gracefully if the JAR is not found or Java is unavailable.
-    """
-    if not _AST_JAR.exists():
+def _run_jar_scanner(jar: Path, paths: list[Path]) -> dict[str, dict]:
+    """Invoke a stdin-to-JSON JAR scanner. Returns {file_path_str: result_dict}."""
+    if not jar.exists():
         return {}
     try:
         proc = subprocess.run(
-            ['java', '-jar', str(_AST_JAR)],
-            input='\n'.join(str(p) for p in java_paths),
+            ['java', '-jar', str(jar)],
+            input='\n'.join(str(p) for p in paths),
             capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -333,24 +330,44 @@ def _ast_scan_files(java_paths: list[Path]) -> dict[str, dict]:
         return {}
 
 
-def _apply_ast_result(comp: Component, ast: dict, base_path: str) -> None:
+def _ast_scan_files(java_paths: list[Path]) -> dict[str, dict]:
+    """JavaParser-based scanner for .java files."""
+    return _run_jar_scanner(_AST_JAR, java_paths)
+
+
+def _kt_scan_files(kt_paths: list[Path]) -> dict[str, dict]:
+    """tree-sitter-based scanner for .kt files."""
+    return _run_jar_scanner(_KT_JAR, kt_paths)
+
+
+def _apply_ast_result(comp: Component, ast: dict, base_path: str,
+                      preserve_on_empty: bool = False) -> None:
     """
     Overwrite field_map, dependencies, and endpoint call lists with AST-accurate data.
+
+    preserve_on_empty: when True, keep the existing regex-derived field_map and
+    dependencies if the AST returns no fields. Use this for Kotlin, where some
+    constructor patterns are not yet recognised by the grammar. For Java, pass
+    False so that the JavaParser scanner can authoritatively say "no fields here"
+    and clear out regex false positives.
     """
-    # Rebuild field_map from AST (name → type), filtering unknown types
     field_map: dict[str, str] = {}
     for f in ast.get('fields', []):
         field_map[f['name']] = f['type']
-    comp.field_map = field_map
-    comp.dependencies = list(dict.fromkeys(field_map.values()))
 
-    # Update per-endpoint call lists using accurate per-method call data
+    if field_map or not preserve_on_empty:
+        comp.field_map = field_map
+        comp.dependencies = list(dict.fromkeys(field_map.values()))
+
+    # Resolve field names → type names for endpoint call lists.
+    # When AST found no fields but preserve_on_empty is True, fall back to the
+    # regex-derived field_map so ep.calls is not silently cleared.
+    effective_field_map = field_map if field_map else (comp.field_map or {})
     method_calls: dict[str, list[str]] = {}
     for m in ast.get('methods', []):
         called_fields = m.get('callsOnFields', [])
-        # Map field name → type name
         called_types = list(dict.fromkeys(
-            field_map[fn] for fn in called_fields if fn in field_map
+            effective_field_map[fn] for fn in called_fields if fn in effective_field_map
         ))
         method_calls[m['name']] = called_types
 
@@ -752,11 +769,24 @@ def scan(root: Path) -> tuple[list[Component], list[str], int]:
             for comp in java_comps:
                 ast = ast_results.get(comp.file)
                 if ast:
-                    _apply_ast_result(comp, ast, comp.base_path)
+                    _apply_ast_result(comp, ast, comp.base_path, preserve_on_empty=False)
             ast_enriched = len(ast_results)
             print(f'  AST: enriched {ast_enriched} Java components.', file=sys.stderr)
     elif java_comps:
         warnings.append('Java AST scanner JAR not found — using regex fallback for Java files')
+
+    # AST pass: re-scan Kotlin files with tree-sitter for accurate field types + method calls
+    kt_comps = [c for c in components if c.file.endswith('.kt')]
+    if kt_comps and _KT_JAR.exists():
+        print('Running AST scanner on Kotlin files…', file=sys.stderr)
+        kt_results = _kt_scan_files([Path(c.file) for c in kt_comps])
+        if kt_results:
+            for comp in kt_comps:
+                ast = kt_results.get(comp.file)
+                if ast:
+                    _apply_ast_result(comp, ast, comp.base_path, preserve_on_empty=True)
+            ast_enriched += len(kt_results)
+            print(f'  AST: enriched {len(kt_results)} Kotlin components.', file=sys.stderr)
 
     # Second pass: find router config files, extract RouterOperations, and attach
     # real paths to handler components that were detected with placeholder paths.

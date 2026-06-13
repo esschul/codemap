@@ -18,4 +18,4 @@ codemap = "codemap.cli:main"
 include = ["codemap*"]
 
 [tool.setuptools.package-data]
-codemap = ["ast-scanner.jar"]
+codemap = ["ast-scanner.jar", "kt-scanner.jar"]

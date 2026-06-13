@@ -155,7 +155,7 @@ def _sidebar_data(components: list[Component]) -> list[dict]:
             'endpoints': [
                 {
                     'method': ep.http_method,
-                    'path': ep.path,
+                    'path': ep.path if not ep.path.startswith('__handler__') else f'(handler) {ep.handler}',
                     'handler': ep.handler,
                     'calls': ep.calls,
                 }
@@ -1616,7 +1616,7 @@ document.getElementById('chain-area').addEventListener('click', e => {
   document.getElementById('meta-version').textContent = `codemap v${SCAN_META.scannerVersion}`;
   if (SCAN_META.astEnriched) {
     document.getElementById('meta-version').textContent +=
-      ` · AST (${SCAN_META.astEnriched} Java)`;
+      ` · AST (${SCAN_META.astEnriched})`;
   } else if (SCAN_META.totalComponents > 0) {
     document.getElementById('meta-version').textContent += ' · regex only';
   }
