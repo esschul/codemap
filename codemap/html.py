@@ -1055,9 +1055,9 @@ function renderChainSVG(ctrlName, ep) {
   const mc = methodColor[ep.method] || '#64748b';
   const title = `
     <rect x="0" y="0" width="${svgW}" height="44" fill="none"/>
-    <rect x="${PAD_X}" y="14" width="${ep.method.length * 7 + 16}" height="24" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1"/>
-    <text x="${PAD_X + 8}" y="30" font-family="system-ui" font-size="11" font-weight="800" fill="${mc}">${ep.method}</text>
-    <text x="${PAD_X + 8 + (ep.method.length * 7) + 6}" y="30" font-family="'SF Mono','Fira Code',monospace" font-size="12" fill="#94a3b8">${escXml(ep.path)}</text>
+    <rect x="${PAD_X}" y="13" width="${ep.method.length * 7 + 20}" height="22" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1.5"/>
+    <text x="${PAD_X + 10}" y="29" font-family="system-ui" font-size="11" font-weight="800" fill="${mc}">${ep.method}</text>
+    <text x="${PAD_X + ep.method.length * 7 + 36}" y="29" font-family="'SF Mono','Fira Code',monospace" font-size="12" fill="#94a3b8">${escXml(ep.path)}</text>
   `;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}">
