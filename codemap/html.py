@@ -1327,6 +1327,7 @@ async function summariseEndpoint(ctrlName, ep, outputEl) {
       }),
     });
     outputEl.textContent = '';
+    outputEl.style.display = 'none';
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buffer = '';
@@ -1339,7 +1340,10 @@ async function summariseEndpoint(ctrlName, ep, outputEl) {
       for (const line of lines) {
         if (!line.trim()) continue;
         const chunk = JSON.parse(line);
-        if (chunk.response) outputEl.textContent += chunk.response;
+        if (chunk.response) {
+          if (!outputEl.style.display || outputEl.style.display === 'none') outputEl.style.display = '';
+          outputEl.textContent += chunk.response;
+        }
       }
     }
   } catch (e) {
@@ -1378,19 +1382,6 @@ function selectEndpoint(ctrlName, ep, itemEl){
       <span style="color:var(--text)">${escHtml(fc.field)}</span>.${escHtml(fc.method)}()
       <span style="opacity:.5"> ${escHtml(fc.type)}</span>
     </div>`).join('');
-  const summariseSection = hasEvidence ? `
-    <div style="margin-top:12px">
-      <button id="btn-summarise" style="
-        width:100%;padding:6px 0;font-size:11px;cursor:pointer;
-        background:var(--accent);color:#fff;border:none;border-radius:4px;
-        display:flex;align-items:center;justify-content:center;gap:6px">
-        ✦ Summarise with AI
-      </button>
-      <div id="llm-output" style="
-        margin-top:10px;font-size:12px;line-height:1.7;color:var(--text);
-        white-space:pre-wrap"></div>
-    </div>` : '';
-
   const ndBody = document.getElementById('nd-body');
   ndBody.innerHTML = `
     <div style="padding:12px 14px">
@@ -1398,13 +1389,22 @@ function selectEndpoint(ctrlName, ep, itemEl){
                   text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
         ${escHtml(ep.method)} ${escHtml(ep.path)}
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px">
         handler: <code style="color:var(--text)">${escHtml(ctrlName)}.${escHtml(ep.handler)}()</code>
       </div>
-      ${summariseSection}
       ${hasMethodEvidence ? `<div style="font-size:10px;font-weight:700;color:var(--text-muted);
-        text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px">Calls</div>
-        ${callRows}` : '<div style="font-size:11px;color:var(--text-muted);opacity:.6;margin-top:8px">No method-call evidence found; summary will use endpoint and component evidence.</div>'}
+        text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Calls</div>
+        <div style="margin-bottom:12px">${callRows}</div>` : ''}
+      ${hasEvidence ? `<button id="btn-summarise" style="
+        width:100%;padding:7px 0;font-size:12px;font-weight:600;cursor:pointer;
+        background:var(--accent);color:#fff;border:none;border-radius:6px;
+        letter-spacing:.02em">
+        ✦ Summarise with AI
+      </button>
+      <div id="llm-output" style="
+        margin-top:12px;font-size:13px;line-height:1.75;color:var(--text);
+        white-space:pre-wrap;border-top:1px solid var(--border);padding-top:12px;
+        display:none"></div>` : ''}
     </div>`;
 
   // Expand inspector if collapsed
