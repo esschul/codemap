@@ -1376,7 +1376,7 @@ function selectEndpoint(ctrlName, ep, itemEl){
 
   // Inspector panel: show call evidence + Summarise button
   const hasMethodEvidence = (ep.fieldCalls || []).length > 0;
-  const hasEvidence = hasMethodEvidence || (ep.calls || []).length > 0;
+  const hasEvidence = hasMethodEvidence;
   const callRows = (ep.fieldCalls || [])
     .map(fc => `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
       <span style="color:var(--text)">${escHtml(fc.field)}</span>.${escHtml(fc.method)}()
