@@ -364,16 +364,20 @@ def _apply_ast_result(comp: Component, ast: dict, base_path: str,
     # regex-derived field_map so ep.calls is not silently cleared.
     effective_field_map = field_map if field_map else (comp.field_map or {})
     method_calls: dict[str, list[str]] = {}
+    method_field_calls: dict[str, list[dict]] = {}
     for m in ast.get('methods', []):
         called_fields = m.get('callsOnFields', [])
         called_types = list(dict.fromkeys(
             effective_field_map[fn] for fn in called_fields if fn in effective_field_map
         ))
         method_calls[m['name']] = called_types
+        method_field_calls[m['name']] = m.get('fieldCalls', [])
 
     for ep in comp.endpoints:
         if ep.handler in method_calls:
             ep.calls = method_calls[ep.handler]
+        if ep.handler in method_field_calls:
+            ep.field_calls = method_field_calls[ep.handler]
 
 
 # ── File parser ───────────────────────────────────────────────────────────────
@@ -809,7 +813,9 @@ def scan(root: Path) -> tuple[list[Component], list[str], int]:
                     fn_name = ep.path[len('__handler__'):]
                     if fn_name in ops:
                         info = ops[fn_name]
-                        updated.append(Endpoint(http_method=info['method'], path=info['path'], handler=fn_name, calls=ep.calls))
+                        updated.append(Endpoint(http_method=info['method'], path=info['path'],
+                                                handler=fn_name, calls=ep.calls,
+                                                field_calls=ep.field_calls))
                     # drop endpoints with no matching route (private helpers etc.)
                 else:
                     updated.append(ep)

@@ -412,6 +412,104 @@ def test_this_qualified_field_call_detected(tmp_path):
     assert "repo" in methods["save"]["callsOnFields"]
 
 
+# ── fieldCalls evidence packet tests ─────────────────────────────────────────
+
+
+def test_field_calls_direct(tmp_path):
+    """Direct call: fun create() = checkoutService.createSession()"""
+    src = tmp_path / "DirectCall.kt"
+    src.write_text(
+        "package demo\nimport org.springframework.stereotype.Service\n"
+        "@Service\nclass DirectCall(private val checkoutService: CheckoutService) {\n"
+        "    fun create() = checkoutService.createSession()\n"
+        "}\n"
+    )
+    a = ast(src)
+    assert a is not None
+    m = {m["name"]: m for m in a["methods"]}
+    fc = m["create"]["fieldCalls"]
+    assert len(fc) == 1
+    assert fc[0] == {"field": "checkoutService", "type": "CheckoutService", "method": "createSession"}
+
+
+def test_field_calls_multiple_methods_same_field(tmp_path):
+    """Two calls on same field must both appear — dedup by (field, method), not field."""
+    src = tmp_path / "MultiMethod.kt"
+    src.write_text(
+        "package demo\nimport org.springframework.stereotype.Service\n"
+        "@Service\nclass MultiMethod(private val checkoutService: CheckoutService) {\n"
+        "    fun handle() {\n"
+        "        checkoutService.validate()\n"
+        "        checkoutService.createSession()\n"
+        "    }\n"
+        "}\n"
+    )
+    a = ast(src)
+    m = {m["name"]: m for m in a["methods"]}
+    fc = m["handle"]["fieldCalls"]
+    methods_called = [e["method"] for e in fc]
+    assert "validate" in methods_called
+    assert "createSession" in methods_called
+    assert all(e["field"] == "checkoutService" for e in fc)
+
+
+def test_field_calls_private_helper_transitive(tmp_path):
+    """getOrder() → private buildResponse() → orderService.findById().
+    getOrder.fieldCalls must include orderService.findById."""
+    src = tmp_path / "TransitiveFC.kt"
+    src.write_text(
+        "package demo\nimport org.springframework.stereotype.Service\n"
+        "@Service\nclass TransitiveFC(private val orderService: OrderService) {\n"
+        "    fun getOrder(id: String) = buildResponse(id)\n"
+        "    private fun buildResponse(id: String) = orderService.findById(id)\n"
+        "}\n"
+    )
+    a = ast(src)
+    m = {m["name"]: m for m in a["methods"]}
+    fc_get = m["getOrder"]["fieldCalls"]
+    assert any(e["field"] == "orderService" and e["method"] == "findById" for e in fc_get), \
+        f"expected orderService.findById in fieldCalls, got: {fc_get}"
+    # buildResponse directly calls it too
+    fc_build = m["buildResponse"]["fieldCalls"]
+    assert any(e["method"] == "findById" for e in fc_build)
+
+
+def test_field_calls_this_receiver(tmp_path):
+    """this.checkoutService.createSession() must produce the same fieldCall as direct call."""
+    src = tmp_path / "ThisReceiver.kt"
+    src.write_text(
+        "package demo\nimport org.springframework.stereotype.Service\n"
+        "@Service\nclass ThisReceiver(private val checkoutService: CheckoutService) {\n"
+        "    fun create() = this.checkoutService.createSession()\n"
+        "}\n"
+    )
+    a = ast(src)
+    m = {m["name"]: m for m in a["methods"]}
+    fc = m["create"]["fieldCalls"]
+    assert len(fc) == 1
+    assert fc[0]["field"] == "checkoutService"
+    assert fc[0]["method"] == "createSession"
+
+
+def test_field_calls_wrapper_false_positive(tmp_path):
+    """wrapper.checkoutService.createSession() must NOT appear in fieldCalls."""
+    src = tmp_path / "WrapperFC.kt"
+    src.write_text(
+        "package demo\nimport org.springframework.stereotype.Service\n"
+        "@Service\nclass WrapperFC(private val checkoutService: CheckoutService) {\n"
+        "    fun handle(wrapper: SomeWrapper) {\n"
+        "        wrapper.checkoutService.createSession()  // NOT injected field\n"
+        "    }\n"
+        "    fun direct() = checkoutService.createSession()  // this IS\n"
+        "}\n"
+    )
+    a = ast(src)
+    m = {m["name"]: m for m in a["methods"]}
+    assert m["handle"]["fieldCalls"] == [], \
+        f"wrapper.field call should not appear, got: {m['handle']['fieldCalls']}"
+    assert len(m["direct"]["fieldCalls"]) == 1
+
+
 # ── regression: wrapper.field.foo() false positive (Codex P1) ────────────────
 
 

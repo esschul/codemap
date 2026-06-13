@@ -6,7 +6,8 @@ class Endpoint:
     http_method: str          # GET / POST / PUT / DELETE / PATCH / ANY
     path: str                 # combined base + method path
     handler: str              # Kotlin method name
-    calls: list[str] = dc_field(default_factory=list)   # service class names used in body
+    calls: list[str] = dc_field(default_factory=list)        # service class names used in body
+    field_calls: list[dict] = dc_field(default_factory=list) # [{field, type, method}] for evidence
 
 
 @dataclass

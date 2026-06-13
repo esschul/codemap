@@ -135,6 +135,9 @@ public class KtScanner {
         Map<String, List<String>> methodDirectFields = new LinkedHashMap<>();
         Map<String, List<String>> methodCallsPrivate = new LinkedHashMap<>();
 
+        // methodDirectFieldCalls: fnName → ordered {field,type,method} records (direct only, for evidence packets)
+        Map<String, List<Map<String, String>>> methodDirectFieldCalls = new LinkedHashMap<>();
+
         if (body != null) {
             // Only private methods are eligible for transitive expansion.
             // Following public sibling calls would give misleading chains in controllers
@@ -151,9 +154,15 @@ public class KtScanner {
                 String fnName = text(findFirstChild(fn, "simple_identifier"), src);
                 if (fnName == null) return;
 
+                // Collect {field, type, method} tuples for direct field calls in this function.
+                List<Map<String, String>> fieldCalls = collectFieldCalls(fn, fieldMap, src);
+                methodDirectFieldCalls.put(fnName, fieldCalls);
+
+                // Derive the plain field-name list for existing transitive expansion logic.
                 List<String> directFields = new ArrayList<>();
-                for (String fieldName : fieldMap.keySet()) {
-                    if (subtreeContainsFieldCall(fn, fieldName, src)) directFields.add(fieldName);
+                Set<String> seen = new LinkedHashSet<>();
+                for (Map<String, String> fc : fieldCalls) {
+                    if (seen.add(fc.get("field"))) directFields.add(fc.get("field"));
                 }
                 methodDirectFields.put(fnName, directFields);
 
@@ -168,19 +177,33 @@ public class KtScanner {
             });
         }
 
-        // Pass 2: expand field calls transitively through private helpers (cycle-safe BFS).
+        // Pass 2: expand both callsOnFields and fieldCalls transitively through private helpers.
+        // Dedup callsOnFields by field name; dedup fieldCalls by (field, method) pair so that
+        // "checkoutService.validate()" and "checkoutService.createSession()" are both preserved.
         Map<String, List<String>> methodAllFields = new LinkedHashMap<>();
+        Map<String, List<Map<String, String>>> methodAllFieldCalls = new LinkedHashMap<>();
         for (String fnName : methodDirectFields.keySet()) {
             Set<String> visited = new LinkedHashSet<>();
-            Set<String> fields = new LinkedHashSet<>(methodDirectFields.get(fnName));
+            Set<String> fieldNames = new LinkedHashSet<>(methodDirectFields.get(fnName));
+            Set<String> fcSeen = new LinkedHashSet<>();
+            List<Map<String, String>> fcList = new ArrayList<>();
+
+            for (Map<String, String> fc : methodDirectFieldCalls.getOrDefault(fnName, List.of())) {
+                if (fcSeen.add(fc.get("field") + "\0" + fc.get("method"))) fcList.add(fc);
+            }
+
             Queue<String> queue = new ArrayDeque<>(methodCallsPrivate.getOrDefault(fnName, List.of()));
             while (!queue.isEmpty()) {
                 String callee = queue.poll();
                 if (!visited.add(callee)) continue;
-                fields.addAll(methodDirectFields.getOrDefault(callee, List.of()));
+                fieldNames.addAll(methodDirectFields.getOrDefault(callee, List.of()));
+                for (Map<String, String> fc : methodDirectFieldCalls.getOrDefault(callee, List.of())) {
+                    if (fcSeen.add(fc.get("field") + "\0" + fc.get("method"))) fcList.add(fc);
+                }
                 queue.addAll(methodCallsPrivate.getOrDefault(callee, List.of()));
             }
-            methodAllFields.put(fnName, new ArrayList<>(fields));
+            methodAllFields.put(fnName, new ArrayList<>(fieldNames));
+            methodAllFieldCalls.put(fnName, fcList);
         }
 
         // Build method JSON using expanded field call sets.
@@ -191,12 +214,20 @@ public class KtScanner {
                 if (fnName == null) return;
                 List<String> fnAnnotations = collectAnnotations(fn, src);
                 String mappingPath = extractMappingPath(fn, src);
+                // callsOnFields: transitively expanded field names (existing behaviour)
                 List<String> calledFields = methodAllFields.getOrDefault(fnName, List.of());
+                // fieldCalls: transitively expanded {field,type,method} tuples for evidence packets.
+                // Same BFS scope as callsOnFields, but preserves method names and allows multiple
+                // methods per field (e.g. service.validate() + service.createSession() both kept).
+                List<Map<String, String>> fieldCallDetails =
+                        methodAllFieldCalls.getOrDefault(fnName, List.of());
+                String fieldCallsJson = fieldCallDetailsJson(fieldCallDetails);
                 methodJsons.add(
                     "{\"name\":" + js(fnName) +
                     ",\"annotations\":" + jsList(fnAnnotations) +
                     ",\"mappingPath\":" + (mappingPath != null ? js(mappingPath) : "null") +
-                    ",\"callsOnFields\":" + jsList(calledFields) + "}"
+                    ",\"callsOnFields\":" + jsList(calledFields) +
+                    ",\"fieldCalls\":" + fieldCallsJson + "}"
                 );
             });
         }
@@ -369,6 +400,82 @@ public class KtScanner {
     }
 
     // ── Field call detection ───────────────────────────────────────────────────
+
+    /**
+     * Walk a function subtree and collect every direct call on an injected field.
+     * Returns ordered {field, type, method} records, deduplicating by (field, method) pair.
+     * Only captures calls whose receiver resolves unambiguously to an injected field
+     * (direct: service.foo(), or this-qualified: this.service.foo()).
+     */
+    private static List<Map<String, String>> collectFieldCalls(
+            TSNode node, Map<String, String> fieldMap, byte[] src) {
+        List<Map<String, String>> result = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        collectFieldCallsInto(node, fieldMap, src, result, seen);
+        return result;
+    }
+
+    private static void collectFieldCallsInto(TSNode node, Map<String, String> fieldMap,
+            byte[] src, List<Map<String, String>> result, Set<String> seen) {
+        if ("call_expression".equals(node.getType()) && node.getChildCount() > 0) {
+            TSNode callee = node.getChild(0);
+            if ("navigation_expression".equals(callee.getType())) {
+                String field = resolveFieldReceiver(callee, fieldMap, src);
+                if (field != null) {
+                    String method = navigationSelector(callee, src);
+                    if (method != null) {
+                        String key = field + "." + method;
+                        if (seen.add(key)) {
+                            Map<String, String> fc = new LinkedHashMap<>();
+                            fc.put("field", field);
+                            fc.put("type", fieldMap.get(field));
+                            fc.put("method", method);
+                            result.add(fc);
+                        }
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            collectFieldCallsInto(node.getChild(i), fieldMap, src, result, seen);
+        }
+    }
+
+    /**
+     * Resolve the receiver of a navigation_expression to an injected field name, or null.
+     * Matches: service.foo() and this.service.foo() — not wrapper.service.foo().
+     */
+    private static String resolveFieldReceiver(TSNode navExpr, Map<String, String> fieldMap, byte[] src) {
+        if (navExpr.getChildCount() == 0) return null;
+        TSNode receiver = navExpr.getChild(0);
+        // service.foo()
+        if ("simple_identifier".equals(receiver.getType())) {
+            String name = text(receiver, src);
+            return fieldMap.containsKey(name) ? name : null;
+        }
+        // this.service.foo()
+        if ("navigation_expression".equals(receiver.getType())) {
+            TSNode innerReceiver = receiver.getChildCount() > 0 ? receiver.getChild(0) : null;
+            if (innerReceiver != null && "this_expression".equals(innerReceiver.getType())) {
+                String selector = navigationSelector(receiver, src);
+                return (selector != null && fieldMap.containsKey(selector)) ? selector : null;
+            }
+        }
+        return null;
+    }
+
+    private static String fieldCallDetailsJson(List<Map<String, String>> fieldCalls) {
+        if (fieldCalls.isEmpty()) return "[]";
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < fieldCalls.size(); i++) {
+            if (i > 0) sb.append(",");
+            Map<String, String> fc = fieldCalls.get(i);
+            sb.append("{\"field\":").append(js(fc.get("field")))
+              .append(",\"type\":").append(js(fc.get("type")))
+              .append(",\"method\":").append(js(fc.get("method"))).append("}");
+        }
+        return sb.append("]").toString();
+    }
 
     private static boolean subtreeContainsFieldCall(TSNode node, String fieldName, byte[] src) {
         String t = node.getType();

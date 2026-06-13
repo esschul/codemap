@@ -158,6 +158,7 @@ def _sidebar_data(components: list[Component]) -> list[dict]:
                     'path': ep.path if not ep.path.startswith('__handler__') else f'(handler) {ep.handler}',
                     'handler': ep.handler,
                     'calls': ep.calls,
+                    'fieldCalls': ep.field_calls,
                 }
                 for ep in sorted(comp.endpoints, key=lambda e: (e.path, e.http_method))
             ] if has_http else [],
@@ -189,7 +190,8 @@ def _comp_lookup(components: list[Component]) -> dict:
                 for e in c.non_http_entrypoints
             ],
             'endpoints': [
-                {'method': ep.http_method, 'path': ep.path, 'handler': ep.handler, 'calls': ep.calls}
+                {'method': ep.http_method, 'path': ep.path, 'handler': ep.handler,
+                 'calls': ep.calls, 'fieldCalls': ep.field_calls}
                 for ep in c.endpoints
             ],
         }
@@ -1258,6 +1260,80 @@ function renderSearch(q) {
   });
 }
 
+// ── Ollama discovery ──────────────────────────────────────────────────────────
+let ollamaModel = null;
+(async () => {
+  try {
+    const r = await fetch('http://localhost:11434/api/tags',
+      { signal: AbortSignal.timeout(600) });
+    if (!r.ok) return;
+    const data = await r.json();
+    const models = (data.models || []).map(m => m.name);
+    // Prefer larger/better models if available
+    const preferred = ['llama3', 'llama3.2', 'mistral', 'phi3', 'phi', 'gemma'];
+    ollamaModel = models.find(n => preferred.some(p => n.startsWith(p))) || models[0] || null;
+  } catch { /* Ollama not running — silent */ }
+})();
+
+function buildEvidencePrompt(ctrlName, ep) {
+  const comp = COMP[ctrlName] || {};
+  const extSystems = (comp.externalSystems || []).join(', ') || 'none';
+  const components  = (ep.calls || []).join(', ') || 'none';
+  const callLines = (ep.fieldCalls || [])
+    .map(fc => `  - ${fc.field}.${fc.method}() [${fc.type}]`)
+    .join('\\n') || '  (none detected)';
+
+  return (
+    `You are a technical documentation assistant for a Spring Boot application.\\n` +
+    `Based only on the evidence below, write 1-2 sentences describing what this endpoint does.\\n` +
+    `Use functional language (validate, create, persist, publish, fetch, calculate, notify).\\n` +
+    `Do not mention class names unless necessary. Do not invent behaviour not supported by the evidence.\\n` +
+    `If evidence is weak, phrase cautiously.\\n\\n` +
+    `Endpoint: ${ep.method} ${ep.path}\\n` +
+    `Handler: ${ctrlName}.${ep.handler}\\n` +
+    `Direct method calls:\\n${callLines}\\n` +
+    `Components reached: ${components}\\n` +
+    `External systems: ${extSystems}\\n\\n` +
+    `Description:`
+  );
+}
+
+async function summariseEndpoint(ctrlName, ep, outputEl) {
+  if (!ollamaModel) {
+    outputEl.textContent = 'Ollama not available (start with: ollama serve)';
+    return;
+  }
+  outputEl.textContent = '…';
+  try {
+    const resp = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaModel,
+        prompt: buildEvidencePrompt(ctrlName, ep),
+        stream: true,
+      }),
+    });
+    outputEl.textContent = '';
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const line of dec.decode(value).split('\\n')) {
+        if (!line.trim()) continue;
+        try {
+          const chunk = JSON.parse(line);
+          if (chunk.response) outputEl.textContent += chunk.response;
+          if (chunk.done) break;
+        } catch { /* partial line */ }
+      }
+    }
+  } catch (e) {
+    outputEl.textContent = `Error: ${e.message}`;
+  }
+}
+
 // ── Endpoint selection ────────────────────────────────────────────────────────
 function selectEndpoint(ctrlName, ep, itemEl){
   document.querySelectorAll('.ep-item').forEach(el=>el.classList.remove('active'));
@@ -1268,16 +1344,35 @@ function selectEndpoint(ctrlName, ep, itemEl){
   chainSvg.innerHTML = renderChainSVG(ctrlName, ep);
   document.getElementById('chain-empty').classList.add('hidden');
 
-  // Show endpoint header in detail panel
+  // Detail panel
   const panel = document.getElementById('detail');
   panel.classList.remove('hidden');
   const noCallsNote = !ep.calls.length
     ? '<span style="opacity:.5;font-size:11px">— no service calls detected in handler body</span>' : '';
-  panel.innerHTML=`<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-    <span class="method m-${escHtml(ep.method)}" style="font-size:10px">${escHtml(ep.method)}</span>
-    <code style="font-size:13px;color:var(--text)">${escHtml(ep.path)}</code>
-    ${noCallsNote}
-  </div>`;
+  const hasEvidence = (ep.fieldCalls || []).length > 0;
+  const summariseBtn = hasEvidence
+    ? `<button id="btn-summarise" style="
+        margin-top:10px;padding:4px 10px;font-size:11px;cursor:pointer;
+        background:var(--accent);color:#fff;border:none;border-radius:4px">
+        ✦ Summarise
+       </button>
+       <div id="llm-output" style="
+        margin-top:8px;font-size:12px;line-height:1.6;color:var(--text);
+        white-space:pre-wrap;min-height:0"></div>`
+    : '';
+  panel.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+      <span class="method m-${escHtml(ep.method)}" style="font-size:10px">${escHtml(ep.method)}</span>
+      <code style="font-size:13px;color:var(--text)">${escHtml(ep.path)}</code>
+      ${noCallsNote}
+    </div>
+    ${summariseBtn}`;
+
+  if (hasEvidence) {
+    document.getElementById('btn-summarise').addEventListener('click', () => {
+      summariseEndpoint(ctrlName, ep, document.getElementById('llm-output'));
+    });
+  }
 }
 
 function resetFilter(){
