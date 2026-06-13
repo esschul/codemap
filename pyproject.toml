@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "springmap"
+name = "codemap"
 version = "1.3.0"
 description = "Interactive Spring Boot architecture mapper"
 readme = "README.md"
