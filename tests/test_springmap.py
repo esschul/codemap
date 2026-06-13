@@ -1,15 +1,26 @@
-import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("springmap", ROOT / "springmap.py")
-springmap = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(springmap)
+sys.path.insert(0, str(ROOT))
+
+from codemap.scan import parse_file
+from codemap.html import generate_html
+from codemap.model import Component, Endpoint
+
+
+class _SpringmapShim:
+    """Namespace shim so existing tests using springmap.X still work."""
+    parse_file = staticmethod(parse_file)
+    generate_html = staticmethod(generate_html)
+    Component = Component
+    Endpoint = Endpoint
+
+springmap = _SpringmapShim()
 
 
 def parse_kotlin(source: str):
