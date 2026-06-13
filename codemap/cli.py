@@ -102,9 +102,9 @@ def main() -> None:
         base_url = f'http://localhost:{port}'
         open_url = f'{base_url}/{args.name}/' if args.name else f'{base_url}/'
         print(f'Serving at {base_url}/', file=sys.stderr)
-        webbrowser.open(open_url)
 
         run_once(args, root, html_path)
+        webbrowser.open(open_url)
         if args.watch:
             print(f'Watching — re-scanning every {args.interval}s. Ctrl+C to stop.', file=sys.stderr)
             try:
