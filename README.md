@@ -11,9 +11,19 @@ No annotations required. No configuration. Point it at a repo root.
 
 ---
 
-## Two reasons to use it
+## Three reasons to use it
 
-### 1. Living documentation
+### 1. See what's happening while you build
+
+Start codemap alongside your editor and watch the architecture map update as new components, endpoints, and dependencies appear:
+
+```bash
+codemap . --serve --watch
+```
+
+The browser shows a reload banner whenever a new scan is ready. You can see the structure take shape in real time — useful when adding a new domain, extracting a service, or onboarding to an unfamiliar codebase.
+
+### 2. Living documentation
 
 Keep an always-current architecture map published to GitHub Pages. Regenerates automatically on every push to main — no manual upkeep.
 
@@ -21,7 +31,7 @@ Keep an always-current architecture map published to GitHub Pages. Regenerates a
 https://<org>.github.io/<repo>/
 ```
 
-### 2. AI-assisted development
+### 3. AI-assisted development
 
 When building or refactoring with an AI coding assistant, the assistant needs to understand how the system is structured — which services exist, what they depend on, which endpoints call what. Without that context it makes changes in the dark.
 
