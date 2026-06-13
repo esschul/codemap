@@ -304,8 +304,8 @@ def _infer_domain(package: str) -> str:
 
 # ── Java AST scanner (JavaParser-backed) ─────────────────────────────────────
 
-# Path to the pre-built fat JAR, relative to this script
-_AST_JAR = Path(__file__).parent.parent / 'ast_scanner' / 'target' / 'ast-scanner.jar'
+# Bundled JAR lives alongside this module (works both in-repo and when pip-installed)
+_AST_JAR = Path(__file__).parent / 'ast-scanner.jar'
 
 # Cache: file path → parsed result dict (or None on error)
 _ast_cache: dict[str, Optional[dict]] = {}

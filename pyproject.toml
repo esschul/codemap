@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "springmap"
+version = "1.3.0"
+description = "Interactive Spring Boot architecture mapper"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["spring-boot", "architecture", "kotlin", "java", "visualization"]
+
+[project.scripts]
+codemap = "codemap.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["codemap*"]
+
+[tool.setuptools.package-data]
+codemap = ["ast-scanner.jar"]
