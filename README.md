@@ -54,6 +54,21 @@ codemap [root] [--title "Name"] [--serve] [--port 8742]
                [--list]             # print component table to stdout
 ```
 
+## Publish to GitHub Pages
+
+Keep a live architecture map auto-published on every push to main.
+
+**One-time setup:**
+
+1. Copy [`contrib/codemap-pages.yml`](contrib/codemap-pages.yml) to `.github/workflows/codemap.yml` in your repo
+2. Go to **Settings → Pages → Source** and set it to the `gh-pages` branch
+
+That's it. The map rebuilds on every push to main, every Monday morning, and on manual trigger from the Actions tab. It will be live at:
+
+```
+https://<org>.github.io/<repo>/
+```
+
 ## What It Detects
 
 - Controllers and HTTP endpoints

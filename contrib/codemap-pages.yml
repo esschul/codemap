@@ -1,0 +1,54 @@
+# Architecture map — auto-published to GitHub Pages
+#
+# Setup:
+#   1. Copy this file to .github/workflows/codemap.yml in your repo
+#   2. Go to Settings → Pages → Source → Deploy from branch → gh-pages / root
+#   3. Push to main — the map will be live at https://<org>.github.io/<repo>/
+#
+# The map regenerates on every push to main, every Monday morning,
+# and whenever you trigger it manually from the Actions tab.
+
+name: Architecture Map
+
+on:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: '0 6 * * 1'   # every Monday at 06:00 UTC
+  workflow_dispatch:        # manual trigger from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Install codemap
+        run: pip install git+https://github.com/esschul/codemap.git
+
+      - name: Generate architecture map
+        run: |
+          codemap . \
+            --no-md \
+            --html docs/index.html \
+            --title "${{ github.event.repository.name }} Architecture"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          commit_message: "docs: update architecture map [skip ci]"
