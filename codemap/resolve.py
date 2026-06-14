@@ -26,6 +26,7 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
     _NOISE_TYPES = frozenset({
         'String', 'Integer', 'Long', 'Boolean', 'List', 'Map', 'Set', 'Optional',
         'ObjectMapper', 'Logger', 'Duration', 'Cache', 'AtomicBoolean', 'BiConsumer',
+        'DataSource', 'Environment', 'ApplicationAvailability',
     })
     # Known library/framework types → canonical external system label
     _KNOWN_TYPES: dict[str, str] = {
@@ -145,7 +146,7 @@ def format_diagnostics(diag: ResolveDiagnostics) -> str:
         lines.append('')
 
     if diag.no_field_calls:
-        lines.append('  ENDPOINTS WITHOUT fieldCalls  (AI summary unavailable)')
+        lines.append('  ENDPOINTS WITHOUT fieldCalls  (method-level evidence unavailable)')
         for ep in diag.no_field_calls:
             lines.append(f'    {ep}')
         lines.append('')
