@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .model import Component
 from .scan import scan
-from .resolve import resolve
+from .resolve import resolve, ResolveDiagnostics, format_diagnostics
 from .html import generate_html
 from .markdown import generate_markdown, generate_endpoint_docs, _generate_docs_index
 
@@ -103,10 +103,14 @@ def run_once(args, root: Path, html_path: Path) -> None:
     import sys
     print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}] Scanning {root}…', file=sys.stderr)
     components, scan_warnings, ast_enriched = scan(root)
-    resolve(components)
+    diag = ResolveDiagnostics() if getattr(args, 'debug_resolve', False) else None
+    resolve(components, diagnostics=diag)
 
     visible = [c for c in components if c.kind not in ('CONFIG',)]
     print(f'Found {len(visible)} components.', file=sys.stderr)
+
+    if diag is not None:
+        print(format_diagnostics(diag), file=sys.stderr)
 
     if not visible:
         print('No Spring components detected. Is this a Spring Boot project?', file=sys.stderr)

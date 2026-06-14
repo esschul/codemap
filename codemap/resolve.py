@@ -1,14 +1,25 @@
 import re
+from dataclasses import dataclass, field as dc_field
 from typing import Optional
 
 from .model import Component
 
 
-def resolve(components: list[Component]) -> None:
+@dataclass
+class ResolveDiagnostics:
+    """Collected during resolve() — describes what was dropped or ambiguous."""
+    dropped: list[dict] = dc_field(default_factory=list)      # {comp, type, reason}
+    ambiguous: list[dict] = dc_field(default_factory=list)    # {comp, type, implementations}
+    no_field_calls: list[str] = dc_field(default_factory=list)  # endpoint handler names
+    unreachable: list[str] = dc_field(default_factory=list)   # component names not reachable from any endpoint
+
+
+def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostics] = None) -> None:
     """Trim dependency lists to only reference other known components.
     Also resolves interface names to their implementations via FooImpl heuristic.
     Unresolvable dependencies that look like external clients are added as external systems."""
     known = {c.name for c in components}
+    diag = diagnostics  # may be None
 
     # Suffixes that suggest an external service boundary rather than a utility type
     _EXTERNAL_SUFFIXES = ('Service', 'Client', 'Gateway', 'Adapter', 'Api', 'Provider')
@@ -42,12 +53,10 @@ def resolve(components: list[Component]) -> None:
                 prefix = name[:-len(suffix)]
                 if not prefix:
                     return None
-                # Strip known noise prefixes
                 for dp in _LABEL_DROP_PREFIXES:
                     if prefix.startswith(dp) and len(prefix) > len(dp):
                         prefix = prefix[len(dp):]
                 label = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', prefix).lower()
-                # Reject labels that are too long (>3 words = likely an internal class name)
                 if label.count('-') >= 3:
                     return None
                 return label
@@ -59,7 +68,7 @@ def resolve(components: list[Component]) -> None:
         for iface in comp.implements:
             _iface_map.setdefault(iface, []).append(comp.name)
 
-    def _resolve_dep(dep: str) -> str:
+    def _resolve_dep(dep: str, comp_name: str) -> str:
         if dep in known:
             return dep
         for suffix in ('Impl', 'Implementation'):
@@ -70,19 +79,86 @@ def resolve(components: list[Component]) -> None:
             impls = _iface_map[dep]
             if len(impls) == 1:
                 return impls[0]
+            if diag is not None:
+                diag.ambiguous.append({'comp': comp_name, 'type': dep, 'implementations': impls})
         return dep
 
     for comp in components:
         resolved = []
         for d in comp.dependencies:
-            r = _resolve_dep(d)
+            r = _resolve_dep(d, comp.name)
             if r in known and r != comp.name:
                 resolved.append(r)
             elif r not in known:
                 label = _to_external_label(d)
                 if label and label not in comp.external_systems:
                     comp.external_systems.append(label)
+                elif diag is not None and not label and d not in _NOISE_TYPES:
+                    diag.dropped.append({'comp': comp.name, 'type': d, 'reason': 'unresolved — not a known component or external pattern'})
         comp.dependencies = list(dict.fromkeys(resolved))
 
         for ep in comp.endpoints:
             ep.calls = [c for c in ep.calls if c in known]
+            if diag is not None and not ep.field_calls:
+                diag.no_field_calls.append(f'{comp.name}.{ep.handler}  {ep.http_method} {ep.path}')
+
+    if diag is not None:
+        # Components not reachable from any endpoint (via BFS through dependencies)
+        reachable: set[str] = set()
+        by_name = {c.name: c for c in components}
+        queue = [ep_comp.name
+                 for ep_comp in components if ep_comp.endpoints
+                 for _ in ep_comp.endpoints]
+        # BFS from all controllers
+        frontier = [c.name for c in components if c.endpoints]
+        visited: set[str] = set(frontier)
+        while frontier:
+            nxt = []
+            for name in frontier:
+                for dep in by_name.get(name, Component('', '', '', '')).dependencies:
+                    if dep not in visited:
+                        visited.add(dep)
+                        nxt.append(dep)
+            frontier = nxt
+        reachable = visited
+        diag.unreachable = [
+            c.name for c in components
+            if c.name not in reachable and c.kind not in ('CONFIG',) and not c.endpoints
+        ]
+
+
+def format_diagnostics(diag: ResolveDiagnostics) -> str:
+    lines = ['╔══ Resolve Diagnostics ══════════════════════════════════════╗', '']
+
+    if diag.ambiguous:
+        lines.append('  AMBIGUOUS INTERFACES  (multiple implementations — picked none)')
+        for a in diag.ambiguous:
+            lines.append(f'    {a["comp"]}  →  {a["type"]}')
+            for impl in a['implementations']:
+                lines.append(f'        ↳ {impl}')
+        lines.append('')
+
+    if diag.dropped:
+        lines.append('  DROPPED DEPENDENCIES  (not resolved to any component or external)')
+        for d in diag.dropped:
+            lines.append(f'    {d["comp"]}  →  {d["type"]}')
+        lines.append('')
+
+    if diag.no_field_calls:
+        lines.append('  ENDPOINTS WITHOUT fieldCalls  (AI summary unavailable)')
+        for ep in diag.no_field_calls:
+            lines.append(f'    {ep}')
+        lines.append('')
+
+    if diag.unreachable:
+        lines.append('  UNREACHABLE COMPONENTS  (not connected to any endpoint)')
+        for name in diag.unreachable:
+            lines.append(f'    {name}')
+        lines.append('')
+
+    if not any([diag.ambiguous, diag.dropped, diag.no_field_calls, diag.unreachable]):
+        lines.append('  No issues found.')
+        lines.append('')
+
+    lines.append('╚═════════════════════════════════════════════════════════════╝')
+    return '\n'.join(lines)

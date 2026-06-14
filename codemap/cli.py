@@ -52,6 +52,7 @@ def main() -> None:
     p.add_argument('--port', type=int, default=8742, help='Port for --serve (default: 8742)')
     p.add_argument('--watch', action='store_true', help='Re-scan every --interval seconds')
     p.add_argument('--interval', type=int, default=120, help='Watch interval in seconds (default: 120)')
+    p.add_argument('--debug-resolve', action='store_true', help='Print resolve diagnostics: dropped deps, ambiguous interfaces, unreachable components')
     args = p.parse_args()
 
     root = _resolve_source_root(Path(args.root))
