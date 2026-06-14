@@ -10,6 +10,9 @@ import functools
 import webbrowser
 from pathlib import Path
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
 from .scan import scan
 from .resolve import resolve
 from .serve import run_once
@@ -35,6 +38,44 @@ def _resolve_source_root(given: Path) -> Path:
     return given
 
 
+def _watch(args, root: Path, html_path: Path) -> None:
+    """Block until Ctrl+C, re-scanning on .kt/.java/.py file changes."""
+    _EXTS = {'.kt', '.java', '.groovy', '.kts'}
+    _cooldown = 2.0  # seconds — avoid double-scan on multi-file saves
+
+    lock = threading.Lock()
+    pending: list[float] = []
+
+    class _Handler(FileSystemEventHandler):
+        def on_modified(self, event):
+            if not event.is_directory and Path(event.src_path).suffix in _EXTS:
+                with lock:
+                    pending.append(time.monotonic())
+
+        on_created = on_modified
+        on_moved = on_modified
+
+    observer = Observer()
+    observer.schedule(_Handler(), str(root), recursive=True)
+    observer.start()
+    print(f'Watching {root} for changes. Ctrl+C to stop.', file=sys.stderr)
+
+    try:
+        while True:
+            time.sleep(0.5)
+            with lock:
+                if pending and (time.monotonic() - pending[-1]) >= _cooldown:
+                    pending.clear()
+                else:
+                    continue
+            run_once(args, root, html_path)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        observer.stop()
+        observer.join()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description='Generate an interactive Spring Boot architecture map.'
@@ -53,6 +94,7 @@ def main() -> None:
     p.add_argument('--watch', action='store_true', help='Re-scan every --interval seconds')
     p.add_argument('--interval', type=int, default=120, help='Watch interval in seconds (default: 120)')
     p.add_argument('--debug-resolve', action='store_true', help='Print resolve diagnostics: dropped deps, ambiguous interfaces, unreachable components')
+    p.add_argument('--debug-diff', action='store_true', help='Print structural diff to stderr on each watch iteration')
     args = p.parse_args()
 
     root = _resolve_source_root(Path(args.root))
@@ -109,13 +151,7 @@ def main() -> None:
         run_once(args, root, html_path)
         webbrowser.open(open_url)
         if args.watch:
-            print(f'Watching — re-scanning every {args.interval}s. Ctrl+C to stop.', file=sys.stderr)
-            try:
-                while True:
-                    time.sleep(args.interval)
-                    run_once(args, root, html_path)
-            except KeyboardInterrupt:
-                pass
+            _watch(args, root, html_path)
         else:
             try:
                 while True: time.sleep(1)
@@ -125,10 +161,4 @@ def main() -> None:
     else:
         run_once(args, root, html_path)
         if args.watch:
-            print(f'Watching — re-scanning every {args.interval}s. Ctrl+C to stop.', file=sys.stderr)
-            try:
-                while True:
-                    time.sleep(args.interval)
-                    run_once(args, root, html_path)
-            except KeyboardInterrupt:
-                pass
+            _watch(args, root, html_path)

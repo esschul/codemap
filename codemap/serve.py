@@ -10,6 +10,7 @@ from .git_stats import collect_git_stats, GitFileStats
 from .model import GitStats
 from .html import generate_html
 from .markdown import generate_markdown, generate_endpoint_docs, _generate_docs_index
+from .snapshot import to_snapshot, diff_snapshots, is_empty_diff, format_diff
 
 
 def _generate_landing_page(serve_dir: Path) -> None:
@@ -100,8 +101,12 @@ header p{{font-size:12px;color:#6b7280;margin-left:auto}}
     (serve_dir / 'index.html').write_text(html, encoding='utf-8')
 
 
+_prev_snapshot: dict = {}
+
+
 def run_once(args, root: Path, html_path: Path) -> None:
     """Scan and write all requested outputs. Called on every watch iteration."""
+    global _prev_snapshot
     import sys
     print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}] Scanning {root}…', file=sys.stderr)
     components, scan_warnings, ast_enriched = scan(root)
@@ -127,6 +132,21 @@ def run_once(args, root: Path, html_path: Path) -> None:
     if diag is not None:
         print(format_diagnostics(diag), file=sys.stderr)
 
+    # Snapshot diff
+    curr_snapshot = to_snapshot(visible)
+    diff_data: dict = {}
+    if _prev_snapshot:
+        d = diff_snapshots(_prev_snapshot, curr_snapshot)
+        diff_data = d
+        if getattr(args, 'debug_diff', False):
+            ts = datetime.datetime.now().strftime('%H:%M:%S')
+            if is_empty_diff(d):
+                print(f'[{ts}] Map updated — no structural changes', file=sys.stderr)
+            else:
+                print(f'[{ts}] Map updated', file=sys.stderr)
+                print(format_diff(d), file=sys.stderr)
+    _prev_snapshot = curr_snapshot
+
     if not visible:
         print('No Spring components detected. Is this a Spring Boot project?', file=sys.stderr)
         return
@@ -150,6 +170,9 @@ def run_once(args, root: Path, html_path: Path) -> None:
             'externals': sorted({e for c in visible for e in c.external_systems}),
         }
         (html_path.parent / 'version.json').write_text(json.dumps(version_meta), encoding='utf-8')
+        # Write diff.json for live UI highlighting
+        diff_payload = {**diff_data, 'ts': version_meta['ts']} if diff_data else {'ts': version_meta['ts']}
+        (html_path.parent / 'diff.json').write_text(json.dumps(diff_payload), encoding='utf-8')
         print(f'Written → {html_path}', file=sys.stderr)
         # Regenerate landing page if this is a named project
         if getattr(args, 'name', ''):

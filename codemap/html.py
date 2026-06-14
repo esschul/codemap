@@ -741,17 +741,8 @@ body.light #warnings-panel h4{color:#92400e}
 .warning-item:last-child{border-bottom:none}
 
 /* Footer with scan metadata */
-/* Watch reload banner */
-#reload-banner{display:none;align-items:center;gap:10px;padding:7px 18px;
-  background:#1e3a5f;border-bottom:1px solid #2563eb;font-size:12px;color:#93c5fd;
-  flex-shrink:0}
-#reload-banner.visible{display:flex}
-#reload-banner strong{color:#dbeafe}
-#btn-reload{background:#2563eb;border:none;border-radius:4px;padding:3px 10px;
-  color:#fff;font-size:11px;font-weight:600;cursor:pointer}
-#btn-reload:hover{background:#1d4ed8}
-#btn-reload-dismiss{margin-left:auto;background:none;border:none;color:#93c5fd;
-  font-size:14px;cursor:pointer;line-height:1;padding:0}
+/* Live diff highlights on graph nodes */
+.diff-badge{transition:opacity 3s}
 
 footer{background:var(--surface);border-top:1px solid var(--border);padding:6px 18px;
   display:flex;align-items:center;gap:16px;flex-shrink:0;font-size:10px;color:var(--text-muted)}
@@ -817,12 +808,6 @@ footer code{font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim)}
 </style>
 </head>
 <body>
-<div id="reload-banner">
-  <strong>Architecture updated</strong>
-  <span id="reload-banner-detail"></span>
-  <button id="btn-reload" onclick="location.reload()">Reload</button>
-  <button id="btn-reload-dismiss">✕</button>
-</div>
 <header>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
        stroke="#3b82f6" stroke-width="2" stroke-linecap="round">
@@ -2315,35 +2300,115 @@ document.getElementById('btn-stats-close').addEventListener('click', () => {
 
 renderSidebar();
 
-// ── Watch mode: poll version.json for changes ─────────────────────────────────
+// ── Watch mode: poll diff.json for live highlights ────────────────────────────
 (function(){
   let knownTs = null;
-  let knownCount = null;
-  const banner = document.getElementById('reload-banner');
-  const detail = document.getElementById('reload-banner-detail');
-  document.getElementById('btn-reload-dismiss').addEventListener('click', () => {
-    banner.classList.remove('visible');
-    // Update knownTs so it doesn't immediately reappear
-    fetch('/version.json?_=' + Date.now())
-      .then(r => r.json()).then(v => { knownTs = v.ts; knownCount = v.components; })
-      .catch(() => {});
-  });
-  function poll() {
-    fetch('/version.json?_=' + Date.now())
-      .then(r => r.json())
-      .then(v => {
-        if (knownTs === null) { knownTs = v.ts; knownCount = v.components; return; }
-        if (v.ts !== knownTs) {
-          const diff = v.components !== knownCount
-            ? ` — ${knownCount} → ${v.components} components`
-            : '';
-          detail.textContent = diff;
-          banner.classList.add('visible');
-        }
-      })
-      .catch(() => {}); // not served via HTTP, or file missing — silently skip
+  let clearTimer = null;
+
+  function _clearDiffHighlights() {
+    document.querySelectorAll('[data-diff-active="1"]').forEach(el => {
+      const shape = el.querySelector('rect,ellipse');
+      if (!shape) return;
+      const origStroke = shape.dataset.diffOrigStroke || '';
+      const origStrokeWidth = shape.dataset.diffOrigStrokeWidth || '';
+      const origFilter = shape.dataset.diffOrigFilter || '';
+
+      shape.style.transition = 'stroke 3s ease, stroke-width 3s ease, filter 3s ease';
+      requestAnimationFrame(() => {
+        shape.setAttribute('stroke', origStroke);
+        shape.setAttribute('stroke-width', origStrokeWidth);
+        shape.style.filter = origFilter;
+      });
+
+      delete el.dataset.diffActive;
+      setTimeout(() => {
+        shape.style.transition = '';
+        delete shape.dataset.diffOrigStroke;
+        delete shape.dataset.diffOrigStrokeWidth;
+        delete shape.dataset.diffOrigFilter;
+      }, 3100);
+    });
+    document.querySelectorAll('.diff-badge').forEach(el => {
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 3100);
+    });
   }
-  setInterval(poll, 15000);
+
+  function _applyDiff(d) {
+    if (clearTimer) clearTimeout(clearTimer);
+    document.querySelectorAll('[data-diff-active="1"]').forEach(el => _restoreDiffNode(el));
+    document.querySelectorAll('.diff-badge').forEach(el => el.remove());
+
+    const added = new Set(d.addedComponents || []);
+    const changed = new Set(Object.keys(d.changedComponents || {}));
+    document.querySelectorAll('[data-name]').forEach(el => {
+      const name = el.getAttribute('data-name');
+      if (added.has(name)) {
+        _highlightDiffNode(el, '#4ade80');
+        _badge(el, '+', '#4ade80');
+      } else if (changed.has(name)) {
+        _highlightDiffNode(el, '#fbbf24');
+        _badge(el, '~', '#fbbf24');
+      }
+    });
+    clearTimer = setTimeout(_clearDiffHighlights, 4000);
+  }
+
+  function _highlightDiffNode(el, color) {
+    const shape = el.querySelector('rect,ellipse');
+    if (!shape) return;
+    if (!shape.dataset.diffOrigStroke) {
+      shape.dataset.diffOrigStroke = shape.getAttribute('stroke') || '';
+      shape.dataset.diffOrigStrokeWidth = shape.getAttribute('stroke-width') || '';
+      shape.dataset.diffOrigFilter = shape.style.filter || '';
+    }
+    shape.style.transition = 'none';
+    shape.setAttribute('stroke', color);
+    shape.setAttribute('stroke-width', '2.8');
+    shape.style.filter = `drop-shadow(0 0 7px ${color}cc)`;
+    el.dataset.diffActive = '1';
+  }
+
+  function _restoreDiffNode(el) {
+    const shape = el.querySelector('rect,ellipse');
+    if (!shape) return;
+    shape.setAttribute('stroke', shape.dataset.diffOrigStroke || shape.getAttribute('stroke') || '');
+    shape.setAttribute('stroke-width', shape.dataset.diffOrigStrokeWidth || shape.getAttribute('stroke-width') || '');
+    shape.style.filter = shape.dataset.diffOrigFilter || '';
+    shape.style.transition = '';
+    delete shape.dataset.diffOrigStroke;
+    delete shape.dataset.diffOrigStrokeWidth;
+    delete shape.dataset.diffOrigFilter;
+    delete el.dataset.diffActive;
+  }
+
+  function _badge(el, symbol, color) {
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('class','diff-badge');
+    t.setAttribute('x','-6'); t.setAttribute('y','-6');
+    t.setAttribute('font-size','10'); t.setAttribute('font-weight','bold');
+    t.setAttribute('fill', color);
+    t.textContent = symbol;
+    el.appendChild(t);
+  }
+
+  function poll() {
+    fetch('/diff.json?_=' + Date.now())
+      .then(r => r.json())
+      .then(d => {
+        if (knownTs === null) { knownTs = d.ts; return; }
+        if (d.ts === knownTs) return;
+        knownTs = d.ts;
+        const hasStructural = (d.addedComponents||[]).length
+          + (d.removedComponents||[]).length
+          + Object.keys(d.changedComponents||{}).length > 0;
+        if (hasStructural) _applyDiff(d);
+        else _clearDiffHighlights();
+      })
+      .catch(() => {});
+  }
+
+  setInterval(poll, 3000);
   poll();
 })();
 </script>
