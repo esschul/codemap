@@ -424,12 +424,22 @@ def parse_file(path: Path) -> Optional[Component]:
 
     # Extract implemented interfaces from the class declaration line
     decl_line = text[class_pos:class_pos + 300].split('{')[0]
-    implements_match = re.search(r'\bimplements\s+([\w\s,<>]+?)(?:\s+extends|\s*\{|$)', decl_line)
     implemented_ifaces = []
-    if implements_match:
-        raw = implements_match.group(1)
-        # Strip generics and split on commas
-        implemented_ifaces = [re.sub(r'<.*?>', '', i).strip() for i in raw.split(',') if i.strip()]
+    if is_java:
+        # Java: class Foo implements Bar, Baz
+        m2 = re.search(r'\bimplements\s+([\w\s,<>]+?)(?:\s+extends|\s*$)', decl_line)
+        if m2:
+            implemented_ifaces = [re.sub(r'<.*?>', '', i).strip() for i in m2.group(1).split(',') if i.strip()]
+    else:
+        # Kotlin: class Foo(…) : Bar, Baz(…) — supertypes after the colon
+        # Skip the constructor params first, then grab everything after ':'
+        m2 = re.search(r'\)\s*:\s*(.*)', decl_line) or re.search(r'class\s+\w+\s*:\s*(.*)', decl_line)
+        if m2:
+            # Each supertype may have constructor args: Bar(…) or just Bar
+            for entry in re.split(r',\s*', m2.group(1)):
+                name = re.sub(r'<.*?>', '', entry.split('(')[0]).strip()
+                if re.match(r'^[A-Z]\w+$', name):  # only UpperCamelCase → interfaces/classes
+                    implemented_ifaces.append(name)
 
     # Preamble: everything before the class declaration
     preamble = text[max(0, class_pos - 1000):class_pos]
