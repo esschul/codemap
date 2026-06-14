@@ -11,8 +11,10 @@ ast_scanner/target/generated-sources/
 ast_scanner/target/maven-archiver/
 ast_scanner/target/maven-status/
 ast_scanner/target/*.jar.original
-ast_scanner/target/ast-scanner-*.jar
+ast_scanner/target/ast-scanner*.jar
 
 kt_scanner/target/
 kt_scanner/lib/
 springmap.egg-info/
+llm.txt
+version.json
