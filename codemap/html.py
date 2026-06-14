@@ -142,10 +142,12 @@ def _build_graph_data(components: list[Component]) -> tuple[list[dict], list[dic
 
 
 def _sidebar_data(components: list[Component], by_name: dict | None = None,
-                  iface_map: dict | None = None) -> list[dict]:
+                  iface_map: dict | None = None,
+                  ambiguous_ifaces: dict | None = None) -> list[dict]:
     from .evidence import build_evidence
     _by_name = by_name or {c.name: c for c in components}
     _iface_map = iface_map or {}
+    _ambig = ambiguous_ifaces or {}
     result = []
     for comp in sorted(components, key=lambda c: c.name):
         has_http = comp.kind == 'CONTROLLER' and comp.endpoints
@@ -163,7 +165,8 @@ def _sidebar_data(components: list[Component], by_name: dict | None = None,
                     'handler': ep.handler,
                     'calls': ep.calls,
                     'fieldCalls': ep.field_calls,
-                    'flow': build_evidence(ep, comp, _by_name, iface_map=_iface_map),
+                    'flow': build_evidence(ep, comp, _by_name, iface_map=_iface_map,
+                                          ambiguous_ifaces=_ambig),
                 }
                 for ep in sorted(comp.endpoints, key=lambda e: (e.path, e.http_method))
             ] if has_http else [],
@@ -199,6 +202,11 @@ def _comp_lookup(components: list[Component]) -> dict:
                  'calls': ep.calls, 'fieldCalls': ep.field_calls, 'flow': []}
                 for ep in c.endpoints
             ],
+            'git': {
+                'lastChangedTs': c.git.last_changed_ts,
+                'commits12m': c.git.commits_12m,
+                'lines12m': c.git.lines_12m,
+            } if c.git else None,
         }
     return lut
 
@@ -225,12 +233,14 @@ _SCANNER_VERSION = '1.3.0'
 
 def generate_html(components: list[Component], title: str = 'Application Map',
                   scan_root: Path | None = None, warnings: list[str] | None = None,
-                  ast_enriched: int = 0, iface_map: dict | None = None) -> str:
-    from .evidence import build_evidence
+                  ast_enriched: int = 0, iface_map: dict | None = None,
+                  ambiguous_ifaces: dict | None = None) -> str:
     by_name = {c.name: c for c in components}
     _iface_map = iface_map or {}
+    _ambig = ambiguous_ifaces or {}
     nodes, edges = _build_graph_data(components)
-    sidebar = _sidebar_data(components, by_name=by_name, iface_map=_iface_map)
+    sidebar = _sidebar_data(components, by_name=by_name, iface_map=_iface_map,
+                            ambiguous_ifaces=_ambig)
     comp_lut = _comp_lookup(components)
 
     import datetime as _dt
@@ -644,6 +654,12 @@ body.light .k-MAPPER{background:#cffafe;color:#0e7490}
 .toolbar button{background:transparent;border:1px solid var(--border);border-radius:5px;
   padding:4px 10px;color:var(--text-dim);font-size:11px;cursor:pointer;transition:all .15s}
 .toolbar button:hover{background:var(--border);color:var(--text)}
+#heatmap-toggle{display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden;margin-left:4px}
+#heatmap-toggle .hm-btn{border:none;border-radius:0;padding:3px 8px;font-size:11px;
+  background:transparent;color:var(--text-muted);cursor:pointer;border-right:1px solid var(--border)}
+#heatmap-toggle .hm-btn:last-child{border-right:none}
+#heatmap-toggle .hm-btn.active{background:var(--accent);color:#fff}
+#heatmap-toggle .hm-btn:hover:not(.active){background:var(--border);color:var(--text)}
 #btn-theme{padding:4px 8px;font-size:13px;background:transparent;border:1px solid var(--border);
   border-radius:5px;cursor:pointer}
 #btn-theme:hover{background:var(--border)}
@@ -839,6 +855,14 @@ footer code{font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim)}
       <button id="btn-graph-open">Graph</button>
       <button id="btn-ext-open">Externals</button>
       <button id="btn-stats-open">Stats</button>
+      <span id="heatmap-toggle" title="Colour nodes by Git activity">
+        <button class="hm-btn active" data-hm="off">Normal</button><button class="hm-btn" data-hm="recent">Recent</button><button class="hm-btn" data-hm="churn">Churn</button>
+      </span>
+      <span id="heatmap-legend" style="display:none;align-items:center;gap:4px;margin-left:4px">
+        <span style="font-size:10px;color:var(--text-muted)" id="hm-legend-lo"></span>
+        <span id="hm-legend-bar" style="width:72px;height:8px;border-radius:4px;background:linear-gradient(to right,#e5e7eb,#f59e0b,#7f1d1d)"></span>
+        <span style="font-size:10px;color:var(--text-muted)" id="hm-legend-hi"></span>
+      </span>
     </div>
     <div class="tabs">
       <div class="tab active" data-tab="chain">Endpoints</div>
@@ -1293,21 +1317,35 @@ function onOllamaReady(fn) {
 
 function buildEvidencePrompt(ctrlName, ep) {
   const comp = COMP[ctrlName] || {};
-  const extSystems = (comp.externalSystems || []).join(', ') || 'none';
 
   // Build call flow from bounded evidence graph (ep.flow), fall back to fieldCalls
   let flowLines = '';
+  let flowExternals = [];
   if ((ep.flow || []).length > 0) {
-    flowLines = (ep.flow || []).map(step =>
-      step.external
-        ? `  ${step.from}  →  [${step.external}]`
-        : `  ${step.from}  →  ${step.to}()`
-    ).join('\\n');
+    flowLines = (ep.flow || []).map(step => {
+      if (step.external) {
+        flowExternals.push(step.external);
+        return `  ${step.from}  →  [${step.external}]`;
+      }
+      if (step.ambiguous) {
+        const impls = (step.implementations || []).join(', ');
+        return `  ${step.from}  →  [${step.ambiguous}] (ambiguous: ${impls})`;
+      }
+      if (step.truncated) {
+        return `  ${step.from}  →  … (call chain truncated at depth ${step.depth})`;
+      }
+      return `  ${step.from}  →  ${step.to}()`;
+    }).join('\\n');
   } else {
     flowLines = (ep.fieldCalls || [])
       .map(fc => `  ${fc.field}.${fc.method}() [${fc.type}]`)
       .join('\\n') || '  (none detected)';
   }
+
+  // Collect externals: from flow steps first, then fall back to component-level
+  const compExternals = (comp.externalSystems || []).filter(e => !flowExternals.includes(e));
+  const allExternals = [...flowExternals, ...compExternals];
+  const extSystems = allExternals.join(', ') || 'none';
 
   return (
     `You are a technical documentation assistant for a Spring Boot application.\\n` +
@@ -1393,12 +1431,50 @@ function selectEndpoint(ctrlName, ep, itemEl){
 
   // Inspector panel: show call evidence + Summarise button
   const hasMethodEvidence = (ep.fieldCalls || []).length > 0;
-  const hasEvidence = hasMethodEvidence;
-  const callRows = (ep.fieldCalls || [])
-    .map(fc => `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
-      <span style="color:var(--text)">${escHtml(fc.field)}</span>.${escHtml(fc.method)}()
-      <span style="opacity:.5"> ${escHtml(fc.type)}</span>
-    </div>`).join('');
+  const hasFlowEvidence = (ep.flow || []).length > 0;
+  const hasEvidence = hasMethodEvidence || hasFlowEvidence;
+
+  // Render bounded flow steps (preferred) or raw fieldCalls
+  let evidenceSection = '';
+  if (hasFlowEvidence) {
+    const flowRows = (ep.flow || []).map(step => {
+      if (step.external) {
+        return `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
+          <span style="opacity:.4">→</span> <span style="color:#14b8a6">[${escHtml(step.external)}]</span>
+          <span style="opacity:.4;font-size:10px"> from ${escHtml(step.from)}</span>
+        </div>`;
+      }
+      if (step.ambiguous) {
+        const impls = (step.implementations || []).join(', ');
+        return `<div style="font-size:11px;padding:2px 0;font-family:'SF Mono','Fira Code',monospace;color:#f59e0b">
+          <span style="opacity:.4">→</span> ${escHtml(step.ambiguous)}
+          <span style="font-size:10px;opacity:.7"> (ambiguous: ${escHtml(impls)})</span>
+        </div>`;
+      }
+      if (step.truncated) {
+        return `<div style="font-size:11px;padding:2px 0;color:var(--text-muted)">
+          <span style="opacity:.4">→</span> <span style="opacity:.5">… truncated at depth ${step.depth}</span>
+        </div>`;
+      }
+      return `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
+        <span style="opacity:.4">→</span> <span style="color:var(--text)">${escHtml(step.to || '')}</span>
+        <span style="opacity:.4;font-size:10px"> via ${escHtml(step.from)}</span>
+      </div>`;
+    }).join('');
+    evidenceSection = `<div style="font-size:10px;font-weight:700;color:var(--text-muted);
+      text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Call chain</div>
+      <div style="margin-bottom:12px">${flowRows}</div>`;
+  } else if (hasMethodEvidence) {
+    const callRows = (ep.fieldCalls || [])
+      .map(fc => `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;font-family:'SF Mono','Fira Code',monospace">
+        <span style="color:var(--text)">${escHtml(fc.field)}</span>.${escHtml(fc.method)}()
+        <span style="opacity:.5"> ${escHtml(fc.type)}</span>
+      </div>`).join('');
+    evidenceSection = `<div style="font-size:10px;font-weight:700;color:var(--text-muted);
+      text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Calls</div>
+      <div style="margin-bottom:12px">${callRows}</div>`;
+  }
+
   const ndBody = document.getElementById('nd-body');
   ndBody.innerHTML = `
     <div style="padding:12px 14px">
@@ -1409,9 +1485,7 @@ function selectEndpoint(ctrlName, ep, itemEl){
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px">
         handler: <code style="color:var(--text)">${escHtml(ctrlName)}.${escHtml(ep.handler)}()</code>
       </div>
-      ${hasMethodEvidence ? `<div style="font-size:10px;font-weight:700;color:var(--text-muted);
-        text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Calls</div>
-        <div style="margin-bottom:12px">${callRows}</div>` : ''}
+      ${evidenceSection}
       ${hasEvidence ? `<button id="btn-summarise" style="
         width:100%;padding:7px 0;font-size:12px;font-weight:600;cursor:pointer;
         background:var(--accent);color:#fff;border:none;border-radius:6px;
@@ -1574,7 +1648,7 @@ function renderFullGraph() {
     const c=nodeColor(name);
     const kind=(COMP[name]?.kind||'EXTERNAL');
     const kindLabel=kind.charAt(0)+kind.slice(1).toLowerCase();
-    nodes += `<g>
+    nodes += `<g data-name="${escXml(name)}">
       <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${c.bg}" stroke="${c.border}" stroke-width="1.5"/>
       <text x="${p.x+NW/2}" y="${p.y+12}" text-anchor="middle" fill="${c.text}" font-size="9" font-family="system-ui" opacity="0.65">${escXml(kindLabel)}</text>
       <text x="${p.x+NW/2}" y="${p.y+26}" text-anchor="middle" fill="${c.text}" font-size="${nameFontSize(name)}" font-family="system-ui" font-weight="600">${escXml(truncate(name))}</text>
@@ -1588,13 +1662,14 @@ function renderFullGraph() {
       </marker></defs>
       ${edges}${nodes}
     </svg>`;
+  // Re-apply heatmap overlays after re-render
+  if (typeof hmMode !== 'undefined' && hmMode !== 'off') _applyHeatmap();
 }
 
 // ── Graph overlay ─────────────────────────────────────────────────────────────
-let graphRendered = false;
 function openGraph() {
   document.getElementById('graph-overlay').classList.add('open');
-  if (!graphRendered) { renderFullGraph(); graphRendered = true; }
+  renderFullGraph();
 }
 function closeGraph() {
   document.getElementById('graph-overlay').classList.remove('open');
@@ -1602,6 +1677,188 @@ function closeGraph() {
 document.getElementById('btn-graph-open').addEventListener('click', openGraph);
 document.getElementById('btn-graph-close').addEventListener('click', closeGraph);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGraph(); });
+
+// ── Heatmap ───────────────────────────────────────────────────────────────────
+let hmMode = 'off'; // 'off' | 'recent' | 'churn'
+
+function _mixRgb(a, b, f) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * f),
+    Math.round(a[1] + (b[1] - a[1]) * f),
+    Math.round(a[2] + (b[2] - a[2]) * f),
+  ];
+}
+
+function _rgb(rgb) {
+  return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function _heatTextColor(t) {
+  return t >= 0.48 ? '#ffffff' : '#111827';
+}
+
+// Map [0,1] to solid heatmap colors. No role color shines through in heatmap mode.
+function hmColor(t) {
+  const recentStops = [
+    [0,   [229, 231, 235]], // old: gray-200
+    [0.35,[253, 186, 116]], // orange-300
+    [0.7, [239,  68,  68]], // red-500
+    [1,   [127,  29,  29]], // newest: red-900
+  ];
+  const churnStops = [
+    [0,   [224, 242, 254]], // low: sky-100
+    [0.35,[125, 211, 252]], // sky-300
+    [0.7, [168,  85, 247]], // purple-500
+    [1,   [112,  26, 117]], // highest: fuchsia-900
+  ];
+  const stops = hmMode === 'churn' ? churnStops : recentStops;
+  let lo = stops[0], hi = stops[stops.length-1];
+  for (let i = 0; i < stops.length-1; i++) {
+    if (t >= stops[i][0] && t <= stops[i+1][0]) { lo = stops[i]; hi = stops[i+1]; break; }
+  }
+  const f = lo[0] === hi[0] ? 1 : (t - lo[0]) / (hi[0] - lo[0]);
+  return _rgb(_mixRgb(lo[1], hi[1], f));
+}
+
+function _hmValue(comp) {
+  if (!comp.git) return null;
+  if (hmMode === 'recent') return comp.git.lastChangedTs;
+  if (hmMode === 'churn')  return comp.git.commits12m;
+  return null;
+}
+
+function _normalizeHeat() {
+  const entries = Object.values(COMP)
+    .map(c => ({ name: c.name, val: _hmValue(c) }))
+    .filter(e => e.val !== null);
+  if (!entries.length) return { min: 0, max: 1, hotName: null };
+  const vals = entries.map(e => e.val);
+  const max = Math.max(...vals);
+  const hotName = entries.find(e => e.val === max)?.name || null;
+  return { min: Math.min(...vals), max, hotName };
+}
+
+function _heatScore(val, min, max) {
+  if (hmMode === 'recent') {
+    const ageDays = Math.max(0, (Date.now()/1000 - val) / 86400);
+    return Math.max(0, Math.min(1, 1 - (ageDays / 365)));
+  }
+  if (max <= 0) return 0;
+  return Math.log1p(val) / Math.log1p(max);
+}
+
+function _fmtAge(ts) {
+  if (!ts) return '—';
+  const d = Math.round((Date.now()/1000 - ts) / 86400);
+  if (d === 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 30) return `${d}d ago`;
+  if (d < 365) return `${Math.round(d/30)}mo ago`;
+  const years = Math.round(d/365);
+  return years === 1 ? '1y ago' : `${years}y ago`;
+}
+
+function _hmTooltip(comp) {
+  if (!comp.git) return '';
+  const g = comp.git;
+  if (hmMode === 'recent') {
+    return `Last changed: ${_fmtAge(g.lastChangedTs)}`;
+  }
+  return `${g.commits12m} commits · ${g.lines12m.toLocaleString()} lines changed (12m)`;
+}
+
+function _rememberNodeStyle(g) {
+  const rect = g.querySelector('rect');
+  if (rect && !rect.dataset.origFill) {
+    rect.dataset.origFill = rect.getAttribute('fill') || '';
+    rect.dataset.origStroke = rect.getAttribute('stroke') || '';
+  }
+  g.querySelectorAll('text').forEach(text => {
+    if (!text.dataset.origFill) {
+      text.dataset.origFill = text.getAttribute('fill') || '';
+    }
+  });
+}
+
+function _restoreNodeStyle(g) {
+  const rect = g.querySelector('rect');
+  if (rect?.dataset.origFill) {
+    rect.setAttribute('fill', rect.dataset.origFill);
+    rect.setAttribute('stroke', rect.dataset.origStroke || rect.getAttribute('stroke') || '');
+  }
+  g.querySelectorAll('text').forEach(text => {
+    if (text.dataset.origFill) text.setAttribute('fill', text.dataset.origFill);
+  });
+  g.querySelectorAll('.hm-tip').forEach(el => el.remove());
+}
+
+function _applyHeatmap() {
+  const legend = document.getElementById('heatmap-legend');
+  if (hmMode === 'off') {
+    legend.style.display = 'none';
+    document.querySelectorAll('[data-name]').forEach(_restoreNodeStyle);
+    return;
+  }
+
+  const { min, max, hotName } = _normalizeHeat();
+
+  // Update legend
+  legend.style.display = 'flex';
+  if (hmMode === 'recent') {
+    document.getElementById('hm-legend-bar').style.background =
+      'linear-gradient(to right,#e5e7eb,#fdba74,#ef4444,#7f1d1d)';
+    document.getElementById('hm-legend-lo').textContent = '1y+';
+    document.getElementById('hm-legend-hi').textContent = 'today';
+    document.getElementById('hm-legend-bar').title = hotName ? `Most recently changed: ${hotName} (${_fmtAge(max)})` : '';
+  } else {
+    document.getElementById('hm-legend-bar').style.background =
+      'linear-gradient(to right,#e0f2fe,#7dd3fc,#a855f7,#701a75)';
+    document.getElementById('hm-legend-lo').textContent = '0 commits (12m)';
+    document.getElementById('hm-legend-hi').textContent =
+      hotName ? `${max} commits (12m, ${hotName})` : `${max} commits (12m)`;
+    document.getElementById('hm-legend-bar').title = hotName ? `Most commits in 12m: ${hotName} (${max})` : '';
+  }
+
+  // Apply to all [data-name] nodes in the DOM
+  document.querySelectorAll('[data-name]').forEach(g => {
+    const name = g.dataset.name;
+    const comp = COMP[name]; if (!comp) return;
+    const val = _hmValue(comp); if (val === null) return;
+    const t = _heatScore(val, min, max);
+    const color = hmColor(t);
+    const rect = g.querySelector('rect');
+    if (!rect) return;
+    _rememberNodeStyle(g);
+    rect.setAttribute('fill', color);
+    rect.setAttribute('stroke', t >= 0.55 ? '#111827' : '#64748b');
+    const textColor = _heatTextColor(t);
+    g.querySelectorAll('text').forEach(text => text.setAttribute('fill', textColor));
+
+    // SVG tooltip (<title> = native browser tooltip on hover)
+    let tip = g.querySelector('.hm-tip');
+    if (!tip) {
+      tip = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      tip.classList.add('hm-tip');
+      g.insertBefore(tip, g.firstChild);
+    }
+    tip.textContent = `${name}: ${_hmTooltip(comp)}`;
+  });
+}
+
+// MutationObserver: re-apply heatmap when chain SVG is updated
+new MutationObserver(() => { if (hmMode !== 'off') _applyHeatmap(); })
+  .observe(document.getElementById('chain-svg'), { childList: true, subtree: false });
+
+// Toolbar buttons
+document.querySelectorAll('.hm-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.hm-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    hmMode = btn.dataset.hm;
+    if (document.getElementById('graph-overlay').classList.contains('open')) renderFullGraph();
+    _applyHeatmap();
+  });
+});
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -1703,6 +1960,28 @@ function showNodeDetail(name) {
       html += `<div class="nd-row"><div class="nd-label">Called by</div><div class="nd-val">`;
       callers.forEach(c => { html += `<span class="nd-tag nd-tag-link" data-nav="${escHtml(c)}">${escHtml(c)}</span> `; });
       html += `</div></div>`;
+    }
+
+    // Git stats
+    if (comp.git) {
+      const g = comp.git;
+      const fmtAge = ts => {
+        if (!ts) return '—';
+        const d = Math.round((Date.now()/1000 - ts) / 86400);
+        if (d === 0) return 'today';
+        if (d === 1) return 'yesterday';
+        if (d < 30) return `${d} days ago`;
+        if (d < 365) return `${Math.round(d/30)} months ago`;
+        const years = Math.round(d/365);
+        return years === 1 ? '1 year ago' : `${years} years ago`;
+      };
+      html += `<div class="nd-row"><div class="nd-label">Git activity</div><div class="nd-val">
+        <div style="font-size:11px;display:flex;flex-direction:column;gap:3px">
+          <span>Last changed: <b>${fmtAge(g.lastChangedTs)}</b></span>
+          <span>Commits (12m): <b>${g.commits12m}</b></span>
+          <span>Lines changed (12m): <b>${g.lines12m.toLocaleString()}</b></span>
+        </div>
+      </div></div>`;
     }
   } else {
     // External system node

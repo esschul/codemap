@@ -129,7 +129,29 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
         ]
 
     # Return flat iface → impl map (only unambiguous entries)
+    # Callers that need the ambiguous map can pass a ResolveDiagnostics and read diag.ambiguous,
+    # or use resolve_full() which returns both maps.
     return {iface: impls[0] for iface, impls in _iface_map.items() if len(impls) == 1}
+
+
+def resolve_full(
+    components: list[Component],
+    diagnostics: Optional[ResolveDiagnostics] = None,
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Like resolve(), but also returns ambiguous_ifaces: {iface: [impl1, impl2, ...]}.
+
+    Uses its own ResolveDiagnostics instance to capture ambiguous entries; merges into
+    the caller-supplied diagnostics if provided.
+    """
+    _diag = ResolveDiagnostics()
+    iface_map = resolve(components, diagnostics=_diag)
+    if diagnostics is not None:
+        diagnostics.dropped.extend(_diag.dropped)
+        diagnostics.ambiguous.extend(_diag.ambiguous)
+        diagnostics.no_field_calls.extend(_diag.no_field_calls)
+        diagnostics.unreachable.extend(_diag.unreachable)
+    ambiguous = {a['type']: a['implementations'] for a in _diag.ambiguous}
+    return iface_map, ambiguous
 
 
 def format_diagnostics(diag: ResolveDiagnostics) -> str:

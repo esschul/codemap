@@ -5,7 +5,9 @@ from pathlib import Path
 
 from .model import Component
 from .scan import scan
-from .resolve import resolve, ResolveDiagnostics, format_diagnostics
+from .resolve import resolve_full, ResolveDiagnostics, format_diagnostics
+from .git_stats import collect_git_stats, GitFileStats
+from .model import GitStats
 from .html import generate_html
 from .markdown import generate_markdown, generate_endpoint_docs, _generate_docs_index
 
@@ -104,10 +106,23 @@ def run_once(args, root: Path, html_path: Path) -> None:
     print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}] Scanning {root}…', file=sys.stderr)
     components, scan_warnings, ast_enriched = scan(root)
     diag = ResolveDiagnostics() if getattr(args, 'debug_resolve', False) else None
-    iface_map = resolve(components, diagnostics=diag)
+    iface_map, ambiguous_ifaces = resolve_full(components, diagnostics=diag)
 
     visible = [c for c in components if c.kind not in ('CONFIG',)]
     print(f'Found {len(visible)} components.', file=sys.stderr)
+
+    # Git heatmap stats — always collected when git is available
+    files = [Path(c.file) for c in visible if c.file]
+    git_map = collect_git_stats(files, root)
+    if git_map:
+        for comp in visible:
+            fs = git_map.get(str(Path(comp.file).resolve()))
+            if fs and fs.last_changed_ts:
+                comp.git = GitStats(
+                    last_changed_ts=fs.last_changed_ts,
+                    commits_12m=fs.commits_12m,
+                    lines_12m=fs.lines_12m,
+                )
 
     if diag is not None:
         print(format_diagnostics(diag), file=sys.stderr)
@@ -120,7 +135,7 @@ def run_once(args, root: Path, html_path: Path) -> None:
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html = generate_html(visible, args.title, scan_root=root,
                              warnings=scan_warnings, ast_enriched=ast_enriched,
-                             iface_map=iface_map)
+                             iface_map=iface_map, ambiguous_ifaces=ambiguous_ifaces)
         html_path.write_text(html, encoding='utf-8')
         # Write rich version.json for polling + landing page metadata
         controllers = [c for c in visible if c.endpoints]

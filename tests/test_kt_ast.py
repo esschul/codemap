@@ -594,3 +594,61 @@ def test_nullable_constructor_param_extracted(tmp_path):
     methods = {m["name"]: m for m in a["methods"]}
     assert "repo" in methods["find"]["callsOnFields"]
     assert "client" in methods["check"]["callsOnFields"]
+
+
+# ── Multi-annotation class fallback (tree-sitter misparse regression) ──────────
+
+
+def test_multi_annotation_class_recognized():
+    """3+ class annotations + @Autowired constructor: KtScanner must not return None.
+
+    tree-sitter 0.3.x misparses this as prefix_expression chain instead of
+    class_declaration. KtScanner falls back to extracting from the misparsed AST.
+    """
+    path = kt("com/example/order/MultiAnnotationController.kt")
+    a = ast(path)
+    assert a is not None, (
+        "KtScanner returned None for multi-annotation class — "
+        "tree-sitter misparse fallback broken"
+    )
+    assert a["className"] == "MultiAnnotationController"
+
+
+def test_multi_annotation_class_annotations_extracted():
+    """Class-level annotations must be collected from the prefix_expression chain."""
+    path = kt("com/example/order/MultiAnnotationController.kt")
+    a = ast(path)
+    assert a is not None
+    anns = a["annotations"]
+    assert "RestController" in anns, f"RestController missing from {anns}"
+    assert "DependsOn" in anns, f"DependsOn missing from {anns}"
+
+
+def test_multi_annotation_fields_extracted():
+    """Constructor params must be extracted even with the misparsed prefix pattern."""
+    path = kt("com/example/order/MultiAnnotationController.kt")
+    a = ast(path)
+    assert a is not None
+    field_types = {f["type"] for f in a["fields"]}
+    assert "OrderService" in field_types, f"OrderService missing from fields: {field_types}"
+    assert "InventoryClient" in field_types, f"InventoryClient missing from fields: {field_types}"
+
+
+def test_multi_annotation_field_calls_emitted():
+    """fieldCalls must include at least service.findAll and client.getStock."""
+    path = kt("com/example/order/MultiAnnotationController.kt")
+    a = ast(path)
+    assert a is not None
+    methods = {m["name"]: m for m in a["methods"]}
+
+    # getOrders → orderService.findAll()
+    assert "getOrders" in methods, f"getOrders missing from methods: {list(methods)}"
+    order_calls = methods["getOrders"]["fieldCalls"]
+    assert any(fc["field"] == "orderService" and fc["method"] == "findAll"
+               for fc in order_calls), f"orderService.findAll missing: {order_calls}"
+
+    # checkInventory → inventoryClient.getStock()
+    assert "checkInventory" in methods
+    inv_calls = methods["checkInventory"]["fieldCalls"]
+    assert any(fc["field"] == "inventoryClient" and fc["method"] == "getStock"
+               for fc in inv_calls), f"inventoryClient.getStock missing: {inv_calls}"

@@ -74,13 +74,27 @@ public class KtScanner {
     private static String scanFile(String filePath, TSNode root, byte[] src) {
         // Find first class or object declaration (skip companion objects)
         TSNode classNode = findFirst(root, "class_declaration", "object_declaration");
-        if (classNode == null) return null;
+        String className = classNode != null
+                ? text(findFirstChild(classNode, "type_identifier"), src) : null;
+        List<String> classAnnotations = classNode != null
+                ? collectAnnotations(classNode, src) : new ArrayList<>();
 
-        // class_declaration → type_identifier (no field annotation in this grammar)
-        String className = text(findFirstChild(classNode, "type_identifier"), src);
+        // Fallback: tree-sitter 0.3.x misparses multi-annotation class declarations
+        // (2+ annotations before the class keyword) as nested prefix_expression chains
+        // rather than class_declaration. The pattern is:
+        //   prefix_expression(annotation, prefix_expression(annotation, infix_expression("class" Name)))
+        // We detect and recover from this by finding the outermost prefix_expression at
+        // source_file level that wraps something containing the "class" keyword.
+        if (className == null) {
+            TSNode misparsed = findMisparsedClassPrefixNode(root, src);
+            if (misparsed != null) {
+                className = extractClassNameFromMisparsed(misparsed, src);
+                classAnnotations = extractAnnotationsFromMisparsed(misparsed, src);
+                classNode = misparsed; // use as anchor for constructor sibling search
+            }
+        }
+
         if (className == null) return null;
-
-        List<String> classAnnotations = collectAnnotations(classNode, src);
 
         // Primary constructor parameters → injected fields.
         // Standard: class Foo(val x: Bar) → primary_constructor is a direct child.
@@ -505,6 +519,76 @@ public class KtScanner {
             if (subtreeContainsFieldCall(node.getChild(i), fieldName, src)) return true;
         }
         return false;
+    }
+
+    // ── Multi-annotation fallback ──────────────────────────────────────────────
+
+    /**
+     * Find a source_file-level prefix_expression that wraps a misparsed class declaration.
+     * tree-sitter 0.3.x produces: prefix_expression(ann, prefix_expression(ann, infix_expression))
+     * when 2+ annotations precede "internal class Foo". We detect this by checking if the
+     * prefix_expression's subtree contains a simple_identifier with text "class".
+     */
+    private static TSNode findMisparsedClassPrefixNode(TSNode root, byte[] src) {
+        for (int i = 0; i < root.getChildCount(); i++) {
+            TSNode child = root.getChild(i);
+            if ("prefix_expression".equals(child.getType())
+                    && subtreeContainsClassKeyword(child, src)) {
+                return child;
+            }
+        }
+        return null;
+    }
+
+    private static boolean subtreeContainsClassKeyword(TSNode node, byte[] src) {
+        if ("simple_identifier".equals(node.getType()) && "class".equals(text(node, src))) return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            if (subtreeContainsClassKeyword(node.getChild(i), src)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Extract the class name from a misparsed prefix_expression.
+     * Finds the deepest infix_expression and returns the identifier after "class".
+     */
+    private static String extractClassNameFromMisparsed(TSNode prefixNode, byte[] src) {
+        TSNode infixExpr = findFirst(prefixNode, "infix_expression");
+        if (infixExpr == null) return null;
+        boolean seenClass = false;
+        for (int i = 0; i < infixExpr.getChildCount(); i++) {
+            TSNode child = infixExpr.getChild(i);
+            if ("simple_identifier".equals(child.getType())) {
+                String t = text(child, src);
+                if (seenClass) return t; // identifier immediately after "class"
+                if ("class".equals(t)) seenClass = true;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Collect annotations from a misparsed prefix_expression chain.
+     * Recurses into nested prefix_expression nodes and collects all annotation children.
+     */
+    private static List<String> extractAnnotationsFromMisparsed(TSNode prefixNode, byte[] src) {
+        List<String> result = new ArrayList<>();
+        collectAnnotationsFromPrefixChain(prefixNode, src, result);
+        return result;
+    }
+
+    private static void collectAnnotationsFromPrefixChain(TSNode node, byte[] src, List<String> result) {
+        String t = node.getType();
+        if ("annotation".equals(t)) {
+            extractAnnotationNames(node, src, result);
+            return;
+        }
+        // Only recurse into prefix_expression chains — stop at infix_expression (the class body)
+        if ("prefix_expression".equals(t)) {
+            for (int i = 0; i < node.getChildCount(); i++) {
+                collectAnnotationsFromPrefixChain(node.getChild(i), src, result);
+            }
+        }
     }
 
     /**

@@ -1,4 +1,12 @@
 from dataclasses import dataclass, field as dc_field
+from typing import Optional
+
+
+@dataclass
+class GitStats:
+    last_changed_ts: Optional[int] = None  # unix timestamp
+    commits_12m: int = 0
+    lines_12m: int = 0                     # added + deleted lines
 
 
 @dataclass
@@ -36,3 +44,4 @@ class Component:
     loc: int = 0
     implements: list[str] = dc_field(default_factory=list)
     method_field_calls: dict[str, list[dict]] = dc_field(default_factory=dict)  # methodName → [{field,type,method}]
+    git: Optional['GitStats'] = None
