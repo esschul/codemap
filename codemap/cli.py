@@ -75,8 +75,10 @@ def main() -> None:
         html_path = Path(args.html)
     elif args.name:
         html_path = _SERVE_DIR / args.name / 'index.html'
-    else:
+    elif args.serve:
         html_path = _SERVE_DIR / 'index.html'
+    else:
+        html_path = Path('appmap.html')
 
     if args.serve and not args.no_html:
         # Always serve from the _SERVE_DIR root so all projects + landing page are reachable
