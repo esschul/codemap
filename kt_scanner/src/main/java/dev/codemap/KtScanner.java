@@ -542,6 +542,13 @@ public class KtScanner {
 
     private static boolean subtreeContainsClassKeyword(TSNode node, byte[] src) {
         if ("simple_identifier".equals(node.getType()) && "class".equals(text(node, src))) return true;
+        String t = node.getType();
+        // Do NOT descend into annotation arguments — Foo::class inside @Schema(implementation=Foo::class)
+        // would otherwise match "class" as a simple_identifier in the misparsed tree.
+        if ("value_arguments".equals(t) || "value_argument".equals(t)
+                || "constructor_invocation".equals(t) || "class_literal".equals(t)) {
+            return false;
+        }
         for (int i = 0; i < node.getChildCount(); i++) {
             if (subtreeContainsClassKeyword(node.getChild(i), src)) return true;
         }

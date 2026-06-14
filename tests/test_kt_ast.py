@@ -652,3 +652,36 @@ def test_multi_annotation_field_calls_emitted():
     inv_calls = methods["checkInventory"]["fieldCalls"]
     assert any(fc["field"] == "inventoryClient" and fc["method"] == "getStock"
                for fc in inv_calls), f"inventoryClient.getStock missing: {inv_calls}"
+
+
+def test_class_literal_in_annotation_does_not_trigger_fallback(tmp_path):
+    """@Schema(implementation = Foo::class) must not confuse the misparsed-class fallback.
+
+    The fallback searches for "class" as a simple_identifier in the prefix_expression
+    subtree. But ::class inside annotation value_arguments also contains "class".
+    The fix excludes value_arguments from the search so this case is handled correctly.
+    """
+    src = tmp_path / "ClassLiteralController.kt"
+    src.write_text(
+        "package demo\n"
+        "import org.springframework.web.bind.annotation.*\n"
+        "import org.springframework.beans.factory.annotation.Autowired\n"
+        "// Simulate a class-level annotation that contains ::class in its args\n"
+        "@RestController\n"
+        "@SomeAnnotation(implementation = SomeClass::class)\n"
+        "internal class ClassLiteralController\n"
+        "@Autowired constructor(\n"
+        "    private val orderService: OrderService,\n"
+        ") {\n"
+        "    @GetMapping(\"/items\")\n"
+        "    fun list() = orderService.findAll()\n"
+        "}\n"
+    )
+    a = ast(src)
+    assert a is not None, "KtScanner returned None — ::class in annotation broke the fallback"
+    assert a["className"] == "ClassLiteralController"
+    field_types = {f["type"] for f in a["fields"]}
+    assert "OrderService" in field_types
+    methods = {m["name"]: m for m in a["methods"]}
+    assert any(fc["field"] == "orderService" and fc["method"] == "findAll"
+               for fc in methods["list"]["fieldCalls"])
