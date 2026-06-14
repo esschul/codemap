@@ -34,3 +34,4 @@ class Component:
     domain: str = ''
     capability: str = ''
     loc: int = 0
+    implements: list[str] = dc_field(default_factory=list)

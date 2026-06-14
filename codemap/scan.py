@@ -422,6 +422,15 @@ def parse_file(path: Path) -> Optional[Component]:
     else:
         return None
 
+    # Extract implemented interfaces from the class declaration line
+    decl_line = text[class_pos:class_pos + 300].split('{')[0]
+    implements_match = re.search(r'\bimplements\s+([\w\s,<>]+?)(?:\s+extends|\s*\{|$)', decl_line)
+    implemented_ifaces = []
+    if implements_match:
+        raw = implements_match.group(1)
+        # Strip generics and split on commas
+        implemented_ifaces = [re.sub(r'<.*?>', '', i).strip() for i in raw.split(',') if i.strip()]
+
     # Preamble: everything before the class declaration
     preamble = text[max(0, class_pos - 1000):class_pos]
 
@@ -523,6 +532,7 @@ def parse_file(path: Path) -> Optional[Component]:
         domain=domain,
         capability=capability,
         loc=text.count('\n') + 1,
+        implements=implemented_ifaces,
     )
 
     # Extract HTTP endpoints for controllers

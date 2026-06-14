@@ -53,6 +53,12 @@ def resolve(components: list[Component]) -> None:
                 return label
         return None
 
+    # Build interface→implementations map from explicit `implements` declarations
+    _iface_map: dict[str, list[str]] = {}
+    for comp in components:
+        for iface in comp.implements:
+            _iface_map.setdefault(iface, []).append(comp.name)
+
     def _resolve_dep(dep: str) -> str:
         if dep in known:
             return dep
@@ -60,6 +66,10 @@ def resolve(components: list[Component]) -> None:
             candidate = dep + suffix
             if candidate in known:
                 return candidate
+        if dep in _iface_map:
+            impls = _iface_map[dep]
+            if len(impls) == 1:
+                return impls[0]
         return dep
 
     for comp in components:
