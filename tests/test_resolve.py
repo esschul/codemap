@@ -28,6 +28,24 @@ def test_resolve_impl_suffix_resolution():
     assert 'PaymentGatewayImpl' in svc.dependencies
 
 
+def test_resolve_interface_to_explicit_implementation():
+    svc = _comp('ServiceTextService', deps=['TextRepository'])
+    repo = _comp('ServiceTextRepository', kind='REPOSITORY')
+    repo.implements = ['TextRepository']
+    resolve([svc, repo])
+    assert svc.dependencies == ['ServiceTextRepository']
+
+
+def test_resolve_ambiguous_interface_implementation_is_not_guessed():
+    svc = _comp('ServiceTextService', deps=['TextRepository'])
+    repo = _comp('ServiceTextRepository', kind='REPOSITORY')
+    other = _comp('OtherTextRepository', kind='REPOSITORY')
+    repo.implements = ['TextRepository']
+    other.implements = ['TextRepository']
+    resolve([svc, repo, other])
+    assert svc.dependencies == []
+
+
 def test_resolve_self_reference_stripped():
     svc = _comp('OrderService', deps=['OrderService', 'Repo'])
     repo = _comp('Repo', kind='REPOSITORY')

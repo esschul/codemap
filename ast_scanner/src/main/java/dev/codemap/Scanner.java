@@ -134,17 +134,26 @@ public class Scanner {
                     }
                 }
 
+                // Build a map of private methods for helper BFS expansion
+                Map<String, MethodDeclaration> privateMethods = new LinkedHashMap<>();
+                for (MethodDeclaration md : cls.getMethods()) {
+                    if (md.isPrivate()) {
+                        privateMethods.put(md.getNameAsString(), md);
+                    }
+                }
+
                 // Collect methods
                 List<String> methodJsons = new ArrayList<>();
                 for (MethodDeclaration md : cls.getMethods()) {
                     List<String> mAnns = annotations(md);
                     String mappingPath = extractMappingPath(md);
 
-                    // Rich field calls: {field, type, method} deduplicated by field+method
+                    // Rich field calls: {field, type, method} — BFS through private helpers
                     List<Map<String, String>> fieldCallsList = new ArrayList<>();
                     Set<String> calledFieldNames = new LinkedHashSet<>();
-                    md.getBody().ifPresent(body ->
-                        collectFieldCalls(body, fieldTypes, fieldCallsList, calledFieldNames));
+                    Set<String> visited = new HashSet<>();
+                    visited.add(md.getNameAsString());
+                    expandMethodCalls(md, fieldTypes, privateMethods, fieldCallsList, calledFieldNames, visited);
 
                     String fieldCallsJson = fieldCallsList.stream()
                         .map(fc -> String.format("{\"field\":%s,\"type\":%s,\"method\":%s}",
@@ -184,6 +193,30 @@ public class Scanner {
             System.err.println("WARN: could not parse " + filePath + ": " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * BFS expansion: collect direct fieldCalls in this method, then follow private helper calls.
+     * Does NOT follow public sibling method calls.
+     */
+    private static void expandMethodCalls(MethodDeclaration md, Map<String, String> fieldTypes,
+                                          Map<String, MethodDeclaration> privateMethods,
+                                          List<Map<String, String>> fieldCallsList,
+                                          Set<String> calledFieldNames,
+                                          Set<String> visited) {
+        md.getBody().ifPresent(body -> {
+            collectFieldCalls(body, fieldTypes, fieldCallsList, calledFieldNames);
+            // Follow calls to private helper methods only
+            body.findAll(MethodCallExpr.class).forEach(call -> {
+                if (call.getScope().isPresent()) return; // has explicit receiver → not a local call
+                String callee = call.getNameAsString();
+                if (!visited.contains(callee) && privateMethods.containsKey(callee)) {
+                    visited.add(callee);
+                    expandMethodCalls(privateMethods.get(callee), fieldTypes, privateMethods,
+                        fieldCallsList, calledFieldNames, visited);
+                }
+            });
+        });
     }
 
     /**
