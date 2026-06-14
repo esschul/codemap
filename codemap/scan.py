@@ -373,6 +373,8 @@ def _apply_ast_result(comp: Component, ast: dict, base_path: str,
         method_calls[m['name']] = called_types
         method_field_calls[m['name']] = m.get('fieldCalls', [])
 
+    comp.method_field_calls = method_field_calls
+
     for ep in comp.endpoints:
         if ep.handler in method_calls:
             ep.calls = method_calls[ep.handler]

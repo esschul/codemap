@@ -141,7 +141,11 @@ def _build_graph_data(components: list[Component]) -> tuple[list[dict], list[dic
     return nodes, edges
 
 
-def _sidebar_data(components: list[Component]) -> list[dict]:
+def _sidebar_data(components: list[Component], by_name: dict | None = None,
+                  iface_map: dict | None = None) -> list[dict]:
+    from .evidence import build_evidence
+    _by_name = by_name or {c.name: c for c in components}
+    _iface_map = iface_map or {}
     result = []
     for comp in sorted(components, key=lambda c: c.name):
         has_http = comp.kind == 'CONTROLLER' and comp.endpoints
@@ -159,6 +163,7 @@ def _sidebar_data(components: list[Component]) -> list[dict]:
                     'handler': ep.handler,
                     'calls': ep.calls,
                     'fieldCalls': ep.field_calls,
+                    'flow': build_evidence(ep, comp, _by_name, iface_map=_iface_map),
                 }
                 for ep in sorted(comp.endpoints, key=lambda e: (e.path, e.http_method))
             ] if has_http else [],
@@ -191,7 +196,7 @@ def _comp_lookup(components: list[Component]) -> dict:
             ],
             'endpoints': [
                 {'method': ep.http_method, 'path': ep.path, 'handler': ep.handler,
-                 'calls': ep.calls, 'fieldCalls': ep.field_calls}
+                 'calls': ep.calls, 'fieldCalls': ep.field_calls, 'flow': []}
                 for ep in c.endpoints
             ],
         }
@@ -220,9 +225,12 @@ _SCANNER_VERSION = '1.3.0'
 
 def generate_html(components: list[Component], title: str = 'Application Map',
                   scan_root: Path | None = None, warnings: list[str] | None = None,
-                  ast_enriched: int = 0) -> str:
+                  ast_enriched: int = 0, iface_map: dict | None = None) -> str:
+    from .evidence import build_evidence
+    by_name = {c.name: c for c in components}
+    _iface_map = iface_map or {}
     nodes, edges = _build_graph_data(components)
-    sidebar = _sidebar_data(components)
+    sidebar = _sidebar_data(components, by_name=by_name, iface_map=_iface_map)
     comp_lut = _comp_lookup(components)
 
     import datetime as _dt
@@ -1286,10 +1294,20 @@ function onOllamaReady(fn) {
 function buildEvidencePrompt(ctrlName, ep) {
   const comp = COMP[ctrlName] || {};
   const extSystems = (comp.externalSystems || []).join(', ') || 'none';
-  const components  = (ep.calls || []).join(', ') || 'none';
-  const callLines = (ep.fieldCalls || [])
-    .map(fc => `  - ${fc.field}.${fc.method}() [${fc.type}]`)
-    .join('\\n') || '  (none detected)';
+
+  // Build call flow from bounded evidence graph (ep.flow), fall back to fieldCalls
+  let flowLines = '';
+  if ((ep.flow || []).length > 0) {
+    flowLines = (ep.flow || []).map(step =>
+      step.external
+        ? `  ${step.from}  →  [${step.external}]`
+        : `  ${step.from}  →  ${step.to}()`
+    ).join('\\n');
+  } else {
+    flowLines = (ep.fieldCalls || [])
+      .map(fc => `  ${fc.field}.${fc.method}() [${fc.type}]`)
+      .join('\\n') || '  (none detected)';
+  }
 
   return (
     `You are a technical documentation assistant for a Spring Boot application.\\n` +
@@ -1299,8 +1317,7 @@ function buildEvidencePrompt(ctrlName, ep) {
     `If evidence is weak, phrase cautiously.\\n\\n` +
     `Endpoint: ${ep.method} ${ep.path}\\n` +
     `Handler: ${ctrlName}.${ep.handler}\\n` +
-    `Direct method calls:\\n${callLines}\\n` +
-    `Components reached: ${components}\\n` +
+    `Call flow:\\n${flowLines}\\n` +
     `External systems: ${extSystems}\\n\\n` +
     `Description:`
   );

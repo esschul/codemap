@@ -19,25 +19,12 @@ import java.util.stream.Collectors;
 /**
  * Reads .java file paths from stdin (one per line), outputs JSON array to stdout.
  *
- * Each element:
- * {
- *   "file": "...",
- *   "className": "...",
- *   "annotations": ["Service", ...],
- *   "fields": [{"name":"dao","type":"PickupPointDao"}, ...],
- *   "methods": [
- *     {
- *       "name": "handleFoo",
- *       "annotations": ["GetMapping"],
- *       "mappingPath": "/api/foo",
- *       "callsOnFields": ["dao", "cache"]   // field names referenced in body
- *     }
- *   ]
- * }
+ * Each method now includes:
+ *   "callsOnFields": ["dao", "cache"]          // field names (backward compat)
+ *   "fieldCalls": [{"field":"dao","type":"DaoType","method":"findById"}]  // rich evidence
  */
 public class Scanner {
 
-    // Primitive / JDK types we don't care about as dependencies
     private static final Set<String> SKIP_TYPES = Set.of(
         "String","Integer","Long","Boolean","Double","Float","Short","Byte","Character",
         "int","long","boolean","double","float","short","byte","char",
@@ -47,6 +34,12 @@ public class Scanner {
         "ObjectMapper","Logger","Duration","Instant","LocalDate","LocalDateTime",
         "BigDecimal","BigInteger","UUID","URI","URL","InputStream","OutputStream",
         "void","Void","T","R","K","V","E"
+    );
+
+    // Skip trivial getter/setter-style method names that add no semantic value
+    private static final Set<String> SKIP_METHODS = Set.of(
+        "get","set","is","toString","hashCode","equals","clone","build","of","from",
+        "stream","iterator","size","isEmpty","contains","add","remove","put","apply"
     );
 
     public static void main(String[] args) throws Exception {
@@ -86,16 +79,13 @@ public class Scanner {
                 boolean injectFinalFields = anns.contains("RequiredArgsConstructor")
                     || anns.contains("AllArgsConstructor");
 
-                // Collect injected fields declared in the class body. Ordinary
-                // state fields are not architectural dependencies.
+                // Collect injected fields: fieldName → typeName
                 Map<String, String> fieldTypes = new LinkedHashMap<>();
                 for (FieldDeclaration fd : cls.getFields()) {
                     boolean injectedField = fd.getAnnotations().stream()
                         .map(a -> a.getNameAsString())
                         .anyMatch(a -> a.equals("Autowired") || a.equals("Inject"));
-                    if (!injectedField && !(injectFinalFields && fd.isFinal())) {
-                        continue;
-                    }
+                    if (!injectedField && !(injectFinalFields && fd.isFinal())) continue;
                     String typeName = simpleTypeName(fd.getElementType());
                     if (SKIP_TYPES.contains(typeName)) continue;
                     for (VariableDeclarator vd : fd.getVariables()) {
@@ -103,7 +93,7 @@ public class Scanner {
                     }
                 }
 
-                // Collect constructor params and this.field = param assignments
+                // Collect constructor-injected fields
                 for (ConstructorDeclaration ctor : cls.getConstructors()) {
                     Map<String, String> paramTypes = new LinkedHashMap<>();
                     for (Parameter param : ctor.getParameters()) {
@@ -114,7 +104,6 @@ public class Scanner {
                     }
                     if (paramTypes.isEmpty()) continue;
 
-                    // Map this.field = param → use field name as key
                     Set<String> assignedParams = new HashSet<>();
                     for (var stmt : ctor.getBody().getStatements()) {
                         if (stmt.isExpressionStmt()) {
@@ -138,7 +127,6 @@ public class Scanner {
                             }
                         }
                     }
-                    // Params not assigned to this.field: use param name directly
                     for (Map.Entry<String, String> e : paramTypes.entrySet()) {
                         if (!assignedParams.contains(e.getKey()) && !fieldTypes.containsKey(e.getKey())) {
                             fieldTypes.put(e.getKey(), e.getValue());
@@ -152,17 +140,24 @@ public class Scanner {
                     List<String> mAnns = annotations(md);
                     String mappingPath = extractMappingPath(md);
 
-                    // Find all field names called in this method body
-                    Set<String> calledFields = new LinkedHashSet<>();
+                    // Rich field calls: {field, type, method} deduplicated by field+method
+                    List<Map<String, String>> fieldCallsList = new ArrayList<>();
+                    Set<String> calledFieldNames = new LinkedHashSet<>();
                     md.getBody().ifPresent(body ->
-                        collectFieldCalls(body, fieldTypes.keySet(), calledFields));
+                        collectFieldCalls(body, fieldTypes, fieldCallsList, calledFieldNames));
+
+                    String fieldCallsJson = fieldCallsList.stream()
+                        .map(fc -> String.format("{\"field\":%s,\"type\":%s,\"method\":%s}",
+                            jsonStr(fc.get("field")), jsonStr(fc.get("type")), jsonStr(fc.get("method"))))
+                        .collect(Collectors.joining(",", "[", "]"));
 
                     String mJson = String.format(
-                        "{\"name\":%s,\"annotations\":%s,\"mappingPath\":%s,\"callsOnFields\":%s}",
+                        "{\"name\":%s,\"annotations\":%s,\"mappingPath\":%s,\"callsOnFields\":%s,\"fieldCalls\":%s}",
                         jsonStr(md.getNameAsString()),
                         jsonStrList(mAnns),
                         mappingPath != null ? jsonStr(mappingPath) : "null",
-                        jsonStrList(new ArrayList<>(calledFields))
+                        jsonStrList(new ArrayList<>(calledFieldNames)),
+                        fieldCallsJson
                     );
                     methodJsons.add(mJson);
                 }
@@ -186,38 +181,45 @@ public class Scanner {
             }
             return parts.isEmpty() ? null : parts.get(0);
         } catch (Exception e) {
-            // Return null on parse error — Python falls back to regex
             System.err.println("WARN: could not parse " + filePath + ": " + e.getMessage());
             return null;
         }
     }
 
-    /** Collect calls of the form fieldName.method() or fieldName.field within a block. */
-    private static void collectFieldCalls(BlockStmt block, Set<String> fieldNames, Set<String> out) {
+    /**
+     * Collect field.method() calls. Populates:
+     *   fieldCallsList — rich {field, type, method} entries (deduplicated by field+method)
+     *   calledFieldNames — just field names (for backward compat callsOnFields)
+     */
+    private static void collectFieldCalls(BlockStmt block, Map<String, String> fieldTypes,
+                                          List<Map<String, String>> fieldCallsList,
+                                          Set<String> calledFieldNames) {
+        Set<String> seen = new LinkedHashSet<>(); // dedup key: field\0method
         block.findAll(MethodCallExpr.class).forEach(call -> {
             call.getScope().ifPresent(scope -> {
-                String receiver = receiverName(scope);
-                if (receiver != null && fieldNames.contains(receiver)) {
-                    out.add(receiver);
+                String receiver = directReceiver(scope);
+                if (receiver == null || !fieldTypes.containsKey(receiver)) return;
+                String methodName = call.getNameAsString();
+                if (SKIP_METHODS.contains(methodName)) return;
+                calledFieldNames.add(receiver);
+                String key = receiver + "\0" + methodName;
+                if (seen.add(key)) {
+                    Map<String, String> fc = new LinkedHashMap<>();
+                    fc.put("field", receiver);
+                    fc.put("type", fieldTypes.get(receiver));
+                    fc.put("method", methodName);
+                    fieldCallsList.add(fc);
                 }
             });
         });
-        // Also field access: fieldName.something (e.g. cache.get, dao.query)
-        block.findAll(FieldAccessExpr.class).forEach(fa -> {
-            String receiver = receiverName(fa.getScope());
-            if (receiver != null && fieldNames.contains(receiver)) {
-                out.add(receiver);
-            }
-        });
     }
 
-    private static String receiverName(Expression expr) {
+    /** Returns the direct receiver name only for simple and this.field patterns. */
+    private static String directReceiver(Expression expr) {
         if (expr.isNameExpr()) return expr.asNameExpr().getNameAsString();
-        if (expr.isThisExpr()) return null;
-        if (expr.isMethodCallExpr()) {
-            // chain: this.foo.bar() → scope is this.foo, which may resolve to a field
-            return expr.asMethodCallExpr().getScope()
-                .map(Scanner::receiverName).orElse(null);
+        if (expr.isFieldAccessExpr()) {
+            FieldAccessExpr fa = expr.asFieldAccessExpr();
+            if (fa.getScope().isThisExpr()) return fa.getNameAsString();
         }
         return null;
     }
@@ -257,10 +259,8 @@ public class Scanner {
 
     private static String simpleTypeName(Type type) {
         if (type.isClassOrInterfaceType()) {
-            // Strip generics, take simple name (last segment of qualified name)
             ClassOrInterfaceType ct = type.asClassOrInterfaceType();
             String name = ct.getNameAsString();
-            // Handle fully qualified: com.example.Foo → Foo
             int dot = name.lastIndexOf('.');
             return dot >= 0 ? name.substring(dot + 1) : name;
         }

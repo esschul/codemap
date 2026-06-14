@@ -104,7 +104,7 @@ def run_once(args, root: Path, html_path: Path) -> None:
     print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}] Scanning {root}…', file=sys.stderr)
     components, scan_warnings, ast_enriched = scan(root)
     diag = ResolveDiagnostics() if getattr(args, 'debug_resolve', False) else None
-    resolve(components, diagnostics=diag)
+    iface_map = resolve(components, diagnostics=diag)
 
     visible = [c for c in components if c.kind not in ('CONFIG',)]
     print(f'Found {len(visible)} components.', file=sys.stderr)
@@ -119,7 +119,8 @@ def run_once(args, root: Path, html_path: Path) -> None:
     if not args.no_html:
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html = generate_html(visible, args.title, scan_root=root,
-                             warnings=scan_warnings, ast_enriched=ast_enriched)
+                             warnings=scan_warnings, ast_enriched=ast_enriched,
+                             iface_map=iface_map)
         html_path.write_text(html, encoding='utf-8')
         # Write rich version.json for polling + landing page metadata
         controllers = [c for c in visible if c.endpoints]

@@ -35,3 +35,4 @@ class Component:
     capability: str = ''
     loc: int = 0
     implements: list[str] = dc_field(default_factory=list)
+    method_field_calls: dict[str, list[dict]] = dc_field(default_factory=dict)  # methodName → [{field,type,method}]

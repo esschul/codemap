@@ -14,7 +14,8 @@ class ResolveDiagnostics:
     unreachable: list[str] = dc_field(default_factory=list)   # component names not reachable from any endpoint
 
 
-def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostics] = None) -> None:
+def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostics] = None) -> dict[str, str]:
+    """Returns iface_map: interface name → single concrete implementation name (where unambiguous)."""
     """Trim dependency lists to only reference other known components.
     Also resolves interface names to their implementations via FooImpl heuristic.
     Unresolvable dependencies that look like external clients are added as external systems."""
@@ -126,6 +127,9 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
             c.name for c in components
             if c.name not in reachable and c.kind not in ('CONFIG',) and not c.endpoints
         ]
+
+    # Return flat iface → impl map (only unambiguous entries)
+    return {iface: impls[0] for iface, impls in _iface_map.items() if len(impls) == 1}
 
 
 def format_diagnostics(diag: ResolveDiagnostics) -> str:
