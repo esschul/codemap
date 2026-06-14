@@ -31,11 +31,20 @@ def test_java_field_calls_format(java_world):
     """fieldCalls has {field, type, method} with interface type preserved."""
     _, by_name, _ = java_world
     ep = _ep(by_name, 'OrderController', 'getOrder')
-    # OrderController.getOrder calls orderService.findOrder()
     assert any(
         fc['field'] == 'orderService' and fc['method'] == 'findOrder'
         for fc in ep.field_calls
     ), f"expected orderService.findOrder in {ep.field_calls}"
+
+
+def test_java_service_injects_interface_not_concrete(java_world):
+    """OrderService field_map uses interface type OrderStore, not OrderRepository."""
+    _, by_name, _ = java_world
+    svc = by_name['OrderService']
+    assert 'OrderStore' in svc.field_map.values(), \
+        f"expected OrderStore in field_map values: {svc.field_map}"
+    assert 'OrderRepository' not in svc.field_map.values(), \
+        "field_map should store declared type (interface), not concrete class"
 
 
 def test_java_calls_on_fields_backward_compat(java_world):
@@ -84,7 +93,11 @@ def test_java_repository_implements_captured(java_world):
 # ── Bounded evidence graph ────────────────────────────────────────────────────
 
 def test_evidence_get_order_two_levels(java_world):
-    """GET /orders/{id}: controller → service.findOrder → repo.findById → [database]."""
+    """GET /orders/{id}: controller → service.findOrder → repo.findById → [database].
+
+    This is the exact shipping-guide-web pattern: service injects interface,
+    resolve maps it to concrete repo, evidence graph crosses the boundary.
+    """
     _, by_name, iface_map = java_world
     ctrl = by_name['OrderController']
     ep = _ep(by_name, 'OrderController', 'getOrder')
@@ -95,8 +108,12 @@ def test_evidence_get_order_two_levels(java_world):
     externals = [s.get('external', '') for s in flow]
 
     assert any('OrderController.getOrder' in f for f in froms), f"flow: {flow}"
-    assert any('OrderService.findOrder' in t for t in tos), f"flow: {flow}"
-    assert any('OrderRepository.findById' in t for t in tos), f"flow: {flow}"
+    assert any('OrderService.findOrder' in t for t in tos), \
+        f"missing service hop — interface injection not resolved: {flow}"
+    assert any('OrderRepository.findById' in t for t in tos), \
+        f"missing repo hop — cross-component traversal broken: {flow}"
+    assert 'database' in externals, \
+        f"missing [database] external — JdbcTemplate not detected: {flow}"
 
 
 def test_evidence_create_order_includes_helper_calls(java_world):

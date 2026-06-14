@@ -4,9 +4,10 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class OrderService {
-    private final OrderRepository orderRepository;
+    // Injects via interface — mirrors shipping-guide-web pattern
+    private final OrderStore orderRepository;
 
-    public OrderService(OrderRepository orderRepository) {
+    public OrderService(OrderStore orderRepository) {
         this.orderRepository = orderRepository;
     }
 

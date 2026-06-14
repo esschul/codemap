@@ -134,7 +134,9 @@ public class Scanner {
                     }
                 }
 
-                // Build a map of private methods for helper BFS expansion
+                // Build a map of private methods for helper BFS expansion.
+                // Keyed by name only — overloads with the same name collapse to the last one.
+                // This is an acceptable limitation for architectural scanning.
                 Map<String, MethodDeclaration> privateMethods = new LinkedHashMap<>();
                 for (MethodDeclaration md : cls.getMethods()) {
                     if (md.isPrivate()) {
@@ -152,8 +154,9 @@ public class Scanner {
                     List<Map<String, String>> fieldCallsList = new ArrayList<>();
                     Set<String> calledFieldNames = new LinkedHashSet<>();
                     Set<String> visited = new HashSet<>();
+                    Set<String> seen = new LinkedHashSet<>(); // dedup across entire BFS
                     visited.add(md.getNameAsString());
-                    expandMethodCalls(md, fieldTypes, privateMethods, fieldCallsList, calledFieldNames, visited);
+                    expandMethodCalls(md, fieldTypes, privateMethods, fieldCallsList, calledFieldNames, visited, seen);
 
                     String fieldCallsJson = fieldCallsList.stream()
                         .map(fc -> String.format("{\"field\":%s,\"type\":%s,\"method\":%s}",
@@ -198,36 +201,36 @@ public class Scanner {
     /**
      * BFS expansion: collect direct fieldCalls in this method, then follow private helper calls.
      * Does NOT follow public sibling method calls.
+     * seen is shared across the BFS so field+method pairs are deduped globally.
      */
     private static void expandMethodCalls(MethodDeclaration md, Map<String, String> fieldTypes,
                                           Map<String, MethodDeclaration> privateMethods,
                                           List<Map<String, String>> fieldCallsList,
                                           Set<String> calledFieldNames,
-                                          Set<String> visited) {
+                                          Set<String> visited,
+                                          Set<String> seen) {
         md.getBody().ifPresent(body -> {
-            collectFieldCalls(body, fieldTypes, fieldCallsList, calledFieldNames);
-            // Follow calls to private helper methods only
+            collectFieldCalls(body, fieldTypes, fieldCallsList, calledFieldNames, seen);
             body.findAll(MethodCallExpr.class).forEach(call -> {
-                if (call.getScope().isPresent()) return; // has explicit receiver → not a local call
+                if (call.getScope().isPresent()) return;
                 String callee = call.getNameAsString();
                 if (!visited.contains(callee) && privateMethods.containsKey(callee)) {
                     visited.add(callee);
                     expandMethodCalls(privateMethods.get(callee), fieldTypes, privateMethods,
-                        fieldCallsList, calledFieldNames, visited);
+                        fieldCallsList, calledFieldNames, visited, seen);
                 }
             });
         });
     }
 
     /**
-     * Collect field.method() calls. Populates:
-     *   fieldCallsList — rich {field, type, method} entries (deduplicated by field+method)
-     *   calledFieldNames — just field names (for backward compat callsOnFields)
+     * Collect field.method() calls into fieldCallsList (deduped via shared seen set)
+     * and calledFieldNames (for backward compat callsOnFields).
      */
     private static void collectFieldCalls(BlockStmt block, Map<String, String> fieldTypes,
                                           List<Map<String, String>> fieldCallsList,
-                                          Set<String> calledFieldNames) {
-        Set<String> seen = new LinkedHashSet<>(); // dedup key: field\0method
+                                          Set<String> calledFieldNames,
+                                          Set<String> seen) {
         block.findAll(MethodCallExpr.class).forEach(call -> {
             call.getScope().ifPresent(scope -> {
                 String receiver = directReceiver(scope);
