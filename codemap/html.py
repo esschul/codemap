@@ -2115,7 +2115,7 @@ function showNodeDetail(name) {
         }
 
         btnSeq.textContent = `Using ${ollamaModel}…`;
-        const prompt = `You are a software architect. Given this Spring Boot class, generate a Mermaid sequence diagram showing the internal method call flow for the most important public method. Show only method calls — no implementation details, no comments. Output only the Mermaid code block, nothing else.\\n\\n\`\`\`kotlin\\n${src.slice(0, 6000)}\\n\`\`\``;
+        const prompt = 'You are a software architect. Given this Spring Boot class, generate a Mermaid sequence diagram showing the internal method call flow for the most important public method. Show only method calls — no implementation details, no comments. Output only the Mermaid code block, nothing else.\n\n```kotlin\n' + src.slice(0, 6000) + '\n```';
 
         const resp = await fetch('http://localhost:11434/api/generate', {
           method: 'POST',
