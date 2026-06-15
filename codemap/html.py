@@ -1718,9 +1718,10 @@ function hmColor(t) {
     [1,   [112,  26, 117]], // highest: fuchsia-900
   ];
   const riskStops = [
-    [0,   [254, 243, 199]], // low: yellow-100
-    [0.35,[251, 146,  60]], // orange-400
-    [0.7, [220,  38,  38]], // red-600
+    [0,   [156, 163, 175]], // no risk: gray-400
+    [0.2, [254, 243, 199]], // low: yellow-100
+    [0.5, [251, 146,  60]], // orange-400
+    [0.75,[220,  38,  38]], // red-600
     [1,   [ 69,  10,  10]], // highest: red-950
   ];
   const stops = hmMode === 'churn' ? churnStops : hmMode === 'risk' ? riskStops : recentStops;
@@ -1735,13 +1736,7 @@ function hmColor(t) {
 function _hmValue(comp) {
   if (hmMode === 'recent') return comp.git ? comp.git.lastChangedTs : null;
   if (hmMode === 'churn')  return comp.git ? comp.git.commits12m : null;
-  if (hmMode === 'risk') {
-    const churn = comp.git ? comp.git.commits12m : 0;
-    const deps  = comp.dependents || 0;
-    // Both must be non-zero to register risk
-    if (churn === 0 && deps === 0) return null;
-    return { churn, deps };
-  }
+  if (hmMode === 'risk') return 0; // score computed separately via _riskScore()
   return null;
 }
 
@@ -1860,7 +1855,7 @@ function _applyHeatmap() {
     document.getElementById('hm-legend-bar').title = hotName ? `Most commits in 12m: ${hotName} (${max})` : '';
   } else {
     document.getElementById('hm-legend-bar').style.background =
-      'linear-gradient(to right,#fef3c7,#fb923c,#dc2626,#450a0a)';
+      'linear-gradient(to right,#9ca3af,#fef3c7,#fb923c,#dc2626,#450a0a)';
     document.getElementById('hm-legend-lo').textContent = 'low risk';
     const hotComp = hotName ? COMP[hotName] : null;
     const hotChurn = hotComp?.git?.commits12m ?? 0;
@@ -1875,7 +1870,6 @@ function _applyHeatmap() {
     const name = g.dataset.name;
     const comp = COMP[name]; if (!comp) return;
     const val = _hmValue(comp); if (val === null && hmMode !== 'risk') return;
-    if (hmMode === 'risk' && _riskScore(comp) === 0) return;
     const t = _heatScore(val, min, max, comp);
     const color = hmColor(t);
     const rect = g.querySelector('rect');
