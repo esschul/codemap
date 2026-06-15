@@ -1869,15 +1869,16 @@ function _applyHeatmap() {
   document.querySelectorAll('[data-name]').forEach(g => {
     const name = g.dataset.name;
     const comp = COMP[name]; if (!comp) return;
-    const val = _hmValue(comp); if (val === null && hmMode !== 'risk') return;
-    const t = _heatScore(val, min, max, comp);
-    const color = hmColor(t);
+    const val = _hmValue(comp);
+    // No git data → gray, same as zero-risk, so all nodes get a consistent palette
+    const t = (val === null && hmMode !== 'risk') ? null : _heatScore(val, min, max, comp);
+    const color = t === null ? 'rgb(156,163,175)' : hmColor(t);
     const rect = g.querySelector('rect');
     if (!rect) return;
     _rememberNodeStyle(g);
     rect.setAttribute('fill', color);
-    rect.setAttribute('stroke', t >= 0.55 ? '#111827' : '#64748b');
-    const textColor = _heatTextColor(t);
+    rect.setAttribute('stroke', t !== null && t >= 0.55 ? '#111827' : '#64748b');
+    const textColor = t !== null ? _heatTextColor(t) : '#374151';
     g.querySelectorAll('text').forEach(text => text.setAttribute('fill', textColor));
 
     // SVG tooltip (<title> = native browser tooltip on hover)
