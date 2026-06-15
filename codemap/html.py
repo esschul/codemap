@@ -179,6 +179,13 @@ def _sidebar_data(components: list[Component], by_name: dict | None = None,
 
 
 def _comp_lookup(components: list[Component]) -> dict:
+    # Count how many components depend on each component
+    dependents: dict[str, int] = {c.name: 0 for c in components}
+    for c in components:
+        for dep in c.dependencies:
+            if dep in dependents:
+                dependents[dep] += 1
+
     lut = {}
     for c in components:
         lut[c.name] = {
@@ -188,6 +195,7 @@ def _comp_lookup(components: list[Component]) -> dict:
             'domain': c.domain,
             'capability': c.capability,
             'dependencies': c.dependencies,
+            'dependents': dependents.get(c.name, 0),
             'externalSystems': c.external_systems,
             'springAnnotations': c.spring_annotations,
             'classificationReason': c.classification_reason,
@@ -854,7 +862,7 @@ footer code{font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim)}
       <button id="btn-ext-open">Externals</button>
       <button id="btn-stats-open">Stats</button>
       <span id="heatmap-toggle" title="Colour nodes by Git activity">
-        <button class="hm-btn active" data-hm="off">Normal</button><button class="hm-btn" data-hm="recent">Recent</button><button class="hm-btn" data-hm="churn">Churn</button>
+        <button class="hm-btn active" data-hm="off">Normal</button><button class="hm-btn" data-hm="recent">Recent</button><button class="hm-btn" data-hm="churn">Churn</button><button class="hm-btn" data-hm="risk">Risk</button>
       </span>
       <span id="heatmap-legend" style="display:none;align-items:center;gap:4px;margin-left:4px">
         <span style="font-size:10px;color:var(--text-muted)" id="hm-legend-lo"></span>
@@ -1677,7 +1685,7 @@ document.getElementById('btn-graph-close').addEventListener('click', closeGraph)
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGraph(); });
 
 // ── Heatmap ───────────────────────────────────────────────────────────────────
-let hmMode = 'off'; // 'off' | 'recent' | 'churn'
+let hmMode = 'off'; // 'off' | 'recent' | 'churn' | 'risk'
 
 function _mixRgb(a, b, f) {
   return [
@@ -1709,7 +1717,13 @@ function hmColor(t) {
     [0.7, [168,  85, 247]], // purple-500
     [1,   [112,  26, 117]], // highest: fuchsia-900
   ];
-  const stops = hmMode === 'churn' ? churnStops : recentStops;
+  const riskStops = [
+    [0,   [254, 243, 199]], // low: yellow-100
+    [0.35,[251, 146,  60]], // orange-400
+    [0.7, [220,  38,  38]], // red-600
+    [1,   [ 69,  10,  10]], // highest: red-950
+  ];
+  const stops = hmMode === 'churn' ? churnStops : hmMode === 'risk' ? riskStops : recentStops;
   let lo = stops[0], hi = stops[stops.length-1];
   for (let i = 0; i < stops.length-1; i++) {
     if (t >= stops[i][0] && t <= stops[i+1][0]) { lo = stops[i]; hi = stops[i+1]; break; }
@@ -1719,13 +1733,34 @@ function hmColor(t) {
 }
 
 function _hmValue(comp) {
-  if (!comp.git) return null;
-  if (hmMode === 'recent') return comp.git.lastChangedTs;
-  if (hmMode === 'churn')  return comp.git.commits12m;
+  if (hmMode === 'recent') return comp.git ? comp.git.lastChangedTs : null;
+  if (hmMode === 'churn')  return comp.git ? comp.git.commits12m : null;
+  if (hmMode === 'risk') {
+    const churn = comp.git ? comp.git.commits12m : 0;
+    const deps  = comp.dependents || 0;
+    // Both must be non-zero to register risk
+    if (churn === 0 && deps === 0) return null;
+    return { churn, deps };
+  }
   return null;
 }
 
+function _riskScore(comp) {
+  const churn = comp.git ? comp.git.commits12m : 0;
+  const deps  = comp.dependents || 0;
+  return Math.log1p(churn) * Math.log1p(deps);
+}
+
 function _normalizeHeat() {
+  if (hmMode === 'risk') {
+    const entries = Object.values(COMP)
+      .map(c => ({ name: c.name, score: _riskScore(c) }))
+      .filter(e => e.score > 0);
+    if (!entries.length) return { min: 0, max: 1, hotName: null, maxScore: 1 };
+    const maxScore = Math.max(...entries.map(e => e.score));
+    const hotName = entries.find(e => e.score === maxScore)?.name || null;
+    return { min: 0, max: maxScore, hotName, maxScore };
+  }
   const entries = Object.values(COMP)
     .map(c => ({ name: c.name, val: _hmValue(c) }))
     .filter(e => e.val !== null);
@@ -1736,10 +1771,15 @@ function _normalizeHeat() {
   return { min: Math.min(...vals), max, hotName };
 }
 
-function _heatScore(val, min, max) {
+function _heatScore(val, min, max, comp) {
   if (hmMode === 'recent') {
     const ageDays = Math.max(0, (Date.now()/1000 - val) / 86400);
     return Math.max(0, Math.min(1, 1 - (ageDays / 365)));
+  }
+  if (hmMode === 'risk') {
+    if (!comp) return 0;
+    const score = _riskScore(comp);
+    return max <= 0 ? 0 : score / max;
   }
   if (max <= 0) return 0;
   return Math.log1p(val) / Math.log1p(max);
@@ -1757,11 +1797,14 @@ function _fmtAge(ts) {
 }
 
 function _hmTooltip(comp) {
+  if (hmMode === 'risk') {
+    const churn = comp.git ? comp.git.commits12m : 0;
+    const deps = comp.dependents || 0;
+    return `Risk: ${churn} commits (12m) × ${deps} dependent${deps !== 1 ? 's' : ''}`;
+  }
   if (!comp.git) return '';
   const g = comp.git;
-  if (hmMode === 'recent') {
-    return `Last changed: ${_fmtAge(g.lastChangedTs)}`;
-  }
+  if (hmMode === 'recent') return `Last changed: ${_fmtAge(g.lastChangedTs)}`;
   return `${g.commits12m} commits · ${g.lines12m.toLocaleString()} lines changed (12m)`;
 }
 
@@ -1808,21 +1851,32 @@ function _applyHeatmap() {
     document.getElementById('hm-legend-lo').textContent = '1y+';
     document.getElementById('hm-legend-hi').textContent = 'today';
     document.getElementById('hm-legend-bar').title = hotName ? `Most recently changed: ${hotName} (${_fmtAge(max)})` : '';
-  } else {
+  } else if (hmMode === 'churn') {
     document.getElementById('hm-legend-bar').style.background =
       'linear-gradient(to right,#e0f2fe,#7dd3fc,#a855f7,#701a75)';
     document.getElementById('hm-legend-lo').textContent = '0 commits (12m)';
     document.getElementById('hm-legend-hi').textContent =
       hotName ? `${max} commits (12m, ${hotName})` : `${max} commits (12m)`;
     document.getElementById('hm-legend-bar').title = hotName ? `Most commits in 12m: ${hotName} (${max})` : '';
+  } else {
+    document.getElementById('hm-legend-bar').style.background =
+      'linear-gradient(to right,#fef3c7,#fb923c,#dc2626,#450a0a)';
+    document.getElementById('hm-legend-lo').textContent = 'low risk';
+    const hotComp = hotName ? COMP[hotName] : null;
+    const hotChurn = hotComp?.git?.commits12m ?? 0;
+    const hotDeps  = hotComp?.dependents ?? 0;
+    document.getElementById('hm-legend-hi').textContent =
+      hotName ? `${hotName} (${hotChurn} commits, ${hotDeps} deps)` : 'high risk';
+    document.getElementById('hm-legend-bar').title = hotName ? `Highest risk: ${hotName}` : '';
   }
 
   // Apply to all [data-name] nodes in the DOM
   document.querySelectorAll('[data-name]').forEach(g => {
     const name = g.dataset.name;
     const comp = COMP[name]; if (!comp) return;
-    const val = _hmValue(comp); if (val === null) return;
-    const t = _heatScore(val, min, max);
+    const val = _hmValue(comp); if (val === null && hmMode !== 'risk') return;
+    if (hmMode === 'risk' && _riskScore(comp) === 0) return;
+    const t = _heatScore(val, min, max, comp);
     const color = hmColor(t);
     const rect = g.querySelector('rect');
     if (!rect) return;
