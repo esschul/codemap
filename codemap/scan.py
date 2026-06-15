@@ -649,8 +649,13 @@ def _extract_endpoints(text: str, class_pos: int, base_path: str,
                 http_method = HTTP_ANNOTATIONS[ann_name]
                 ann_body_str = am.group('ann_body') or ''
                 # @RequestMapping defaults to ANY — resolve from method = RequestMethod.XXX
+                # or method = GET (static import)
                 if http_method == 'ANY' and ann_body_str:
-                    rm = re.search(r'method\s*=\s*(?:\[?\s*)?RequestMethod\.(\w+)', ann_body_str)
+                    rm = re.search(
+                        r'method\s*=\s*(?:\[?\s*)?(?:RequestMethod\.)?'
+                        r'(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)',
+                        ann_body_str,
+                    )
                     if rm:
                         http_method = rm.group(1).upper()
 
