@@ -1989,8 +1989,9 @@ function showNodeDetail(name) {
     // File
     if (comp.file) {
       const shortFile = comp.file.replace(/.*\/src\/main\/(kotlin|java)\//, '');
+      const fileUrl = 'file://' + comp.file;
       html += `<div class="nd-row"><div class="nd-label">Source file</div>
-        <div class="nd-val"><code>${escHtml(shortFile)}</code></div></div>`;
+        <div class="nd-val"><a href="${escHtml(fileUrl)}" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:11px" title="${escHtml(comp.file)}">${escHtml(shortFile)}</a></div></div>`;
     }
 
     // Package / domain
