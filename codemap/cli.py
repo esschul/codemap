@@ -80,10 +80,65 @@ def _watch(args, root: Path, html_path: Path) -> None:
         observer.join()
 
 
+def _cmd_context(argv: list[str]) -> None:
+    """codemap context [root] <path-pattern> — print call chain for matching endpoints."""
+    from .scan import scan
+    from .resolve import resolve_full
+    from .evidence import build_evidence, format_evidence_text, collect_downstream_externals
+
+    p = argparse.ArgumentParser(
+        prog='codemap context',
+        description='Print the call chain for one or more endpoints.',
+    )
+    p.add_argument('root_or_pattern', help='Source root or endpoint path pattern')
+    p.add_argument('pattern', nargs='?', help='Endpoint path pattern (if root given first)')
+    p.add_argument('--depth', type=int, default=3, help='Max call depth (default: 3)')
+    args = p.parse_args(argv)
+
+    # Distinguish: if two args given, first is root; if one arg, root=.
+    if args.pattern:
+        root = _resolve_source_root(Path(args.root_or_pattern))
+        pattern = args.pattern
+    else:
+        root = _resolve_source_root(Path('.'))
+        pattern = args.root_or_pattern
+
+    components, _, _ = scan(root)
+    iface_map, ambiguous_ifaces = resolve_full(components)
+    by_name = {c.name: c for c in components}
+
+    pattern_lower = pattern.lower().lstrip('/')
+    matches: list[tuple] = []  # (ep, ctrl)
+    for ctrl in components:
+        for ep in ctrl.endpoints:
+            if pattern_lower in ep.path.lower() or pattern_lower in ep.handler.lower():
+                matches.append((ep, ctrl))
+
+    if not matches:
+        print(f'No endpoints matching "{pattern}"', file=sys.stderr)
+        sys.exit(1)
+
+    blocks = []
+    for ep, ctrl in matches:
+        flow = build_evidence(ep, ctrl, by_name,
+                              max_depth=args.depth,
+                              iface_map=iface_map,
+                              ambiguous_ifaces=ambiguous_ifaces)
+        comp_externals = list(ctrl.external_systems)
+        blocks.append(format_evidence_text(ep, ctrl, flow, comp_externals))
+
+    print('\n\n'.join(blocks))
+
+
 def main() -> None:
     # `codemap live [root]` — shorthand for --serve --watch --debug-diff
     if len(sys.argv) >= 2 and sys.argv[1] == 'live':
         sys.argv = [sys.argv[0]] + sys.argv[2:] + ['--serve', '--watch', '--debug-diff']
+
+    # `codemap context ...` — print call chain for an endpoint
+    if len(sys.argv) >= 2 and sys.argv[1] == 'context':
+        _cmd_context(sys.argv[2:])
+        return
 
     p = argparse.ArgumentParser(
         description='Generate an interactive Spring Boot architecture map.'
