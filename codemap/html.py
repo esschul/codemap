@@ -2065,6 +2065,19 @@ function showNodeDetail(name) {
         </div>
       </div></div>`;
     }
+
+    // Sequence diagram via Ollama
+    if (comp.file) {
+      html += `<div class="nd-row"><div class="nd-label">Sequence diagram</div>
+        <div class="nd-val">
+          <button id="btn-seqdiag" style="font-size:11px;padding:3px 10px;background:var(--accent);
+            border:none;border-radius:4px;color:#fff;cursor:pointer">
+            Generate with Ollama
+          </button>
+          <div id="seqdiag-out" style="margin-top:8px;font-size:11px;display:none"></div>
+        </div>
+      </div>`;
+    }
   } else {
     // External system node
     const callers = Object.values(COMP).filter(c => c.externalSystems?.includes(name)).map(c=>c.name);
@@ -2080,6 +2093,59 @@ function showNodeDetail(name) {
   inspector.classList.add('has-detail');
   inspector.classList.remove('collapsed');
   localStorage.setItem('inspector-collapsed', '0');
+
+  // Wire up sequence diagram button
+  const btnSeq = document.getElementById('btn-seqdiag');
+  if (btnSeq && comp?.file) {
+    btnSeq.addEventListener('click', async () => {
+      const out = document.getElementById('seqdiag-out');
+      btnSeq.disabled = true;
+      btnSeq.textContent = 'Loading file…';
+      out.style.display = 'block';
+      out.textContent = '';
+      try {
+        const fileResp = await fetch('/file?path=' + encodeURIComponent(comp.file));
+        if (!fileResp.ok) throw new Error('Could not read file');
+        const src = await fileResp.text();
+
+        if (!ollamaModel) {
+          out.textContent = 'Ollama not available. Start it with: ollama serve';
+          btnSeq.disabled = false; btnSeq.textContent = 'Generate with Ollama';
+          return;
+        }
+
+        btnSeq.textContent = `Using ${ollamaModel}…`;
+        const prompt = `You are a software architect. Given this Spring Boot class, generate a Mermaid sequence diagram showing the internal method call flow for the most important public method. Show only method calls — no implementation details, no comments. Output only the Mermaid code block, nothing else.\\n\\n\`\`\`kotlin\\n${src.slice(0, 6000)}\\n\`\`\``;
+
+        const resp = await fetch('http://localhost:11434/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: ollamaModel, prompt, stream: true }),
+        });
+
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += dec.decode(value, { stream: true });
+          const lines = buffer.split('\\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const chunk = JSON.parse(line);
+            if (chunk.response) out.textContent += chunk.response;
+          }
+        }
+        btnSeq.textContent = 'Regenerate';
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+        btnSeq.textContent = 'Generate with Ollama';
+      }
+      btnSeq.disabled = false;
+    });
+  }
 }
 
 // Inspector collapse toggle

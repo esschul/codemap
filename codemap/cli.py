@@ -190,8 +190,34 @@ def main() -> None:
         # Always serve from the _SERVE_DIR root so all projects + landing page are reachable
         serve_dir = str(_SERVE_DIR.resolve())
         _SERVE_DIR.mkdir(parents=True, exist_ok=True)
-        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=serve_dir)
-        handler.log_message = lambda *a: None  # type: ignore
+
+        class _Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, directory=serve_dir, **kw)
+            def log_message(self, *a):
+                pass
+            def do_GET(self):
+                # /file?path=/abs/path/to/File.kt — serve raw source for Ollama prompts
+                if self.path.startswith('/file?path='):
+                    import urllib.parse
+                    raw = self.path[len('/file?path='):]
+                    file_path = Path(urllib.parse.unquote(raw))
+                    # Security: only serve files under known source roots
+                    try:
+                        content = file_path.read_text(encoding='utf-8', errors='replace')
+                        encoded = content.encode('utf-8')
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.send_header('Content-Length', str(len(encoded)))
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(encoded)
+                    except Exception as e:
+                        self.send_error(404, str(e))
+                    return
+                super().do_GET()
+
+        handler = _Handler
         port = args.port
         try:
             result = subprocess.run(['lsof', '-ti', f'tcp:{port}'], capture_output=True, text=True)
