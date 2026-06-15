@@ -533,7 +533,15 @@ header h1{font-size:15px;font-weight:600;color:var(--text)}
 
 /* Sidebar */
 .sidebar{width:290px;background:var(--surface);border-right:1px solid var(--border);
-         display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+         display:flex;flex-direction:row;overflow:hidden;flex-shrink:0;transition:width .2s}
+.sidebar.collapsed{width:28px}
+.sidebar.collapsed .sb-inner{visibility:hidden}
+.sb-toggle{width:28px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;
+  padding-top:10px;border-right:1px solid var(--border);cursor:pointer;user-select:none}
+.sb-toggle:hover{background:var(--border)}
+.sb-toggle-arrow{font-size:11px;color:var(--text-muted);line-height:1;transition:transform .2s}
+.sidebar.collapsed .sb-toggle-arrow{transform:rotate(180deg)}
+.sb-inner{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .sb-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
 .sb-tab{flex:1;padding:7px 2px;font-size:10px;font-weight:600;text-align:center;
   cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;
@@ -819,18 +827,23 @@ footer code{font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim)}
 </header>
 
 <div class="layout">
-  <div class="sidebar">
-    <div class="sb-tabs" id="sb-tabs">
-      <div class="sb-tab active" data-sb="HTTP">HTTP</div>
-      <div class="sb-tab" data-sb="JOBS">Jobs</div>
-      <div class="sb-tab" data-sb="EVENTS">Events</div>
-      <div class="sb-tab" data-sb="SEARCH">Search</div>
+  <div class="sidebar" id="sidebar">
+    <div class="sb-toggle" id="sb-toggle" title="Toggle sidebar">
+      <span class="sb-toggle-arrow">&#x276E;</span>
     </div>
-    <div class="sb-search-wrap" id="sb-search-wrap">
-      <input id="q" type="text" placeholder="Components, endpoints, packages…" autocomplete="off"/>
+    <div class="sb-inner">
+      <div class="sb-tabs" id="sb-tabs">
+        <div class="sb-tab active" data-sb="HTTP">HTTP</div>
+        <div class="sb-tab" data-sb="JOBS">Jobs</div>
+        <div class="sb-tab" data-sb="EVENTS">Events</div>
+        <div class="sb-tab" data-sb="SEARCH">Search</div>
+      </div>
+      <div class="sb-search-wrap" id="sb-search-wrap">
+        <input id="q" type="text" placeholder="Components, endpoints, packages…" autocomplete="off"/>
+      </div>
+      <div class="sidebar-body" id="sb"></div>
+      <div class="legend" id="legend"></div>
     </div>
-    <div class="sidebar-body" id="sb"></div>
-    <div class="legend" id="legend"></div>
   </div>
 
   <div class="main">
@@ -2299,6 +2312,11 @@ document.getElementById('btn-stats-close').addEventListener('click', () => {
 });
 
 renderSidebar();
+
+// ── Sidebar collapse toggle ────────────────────────────────────────────────────
+document.getElementById('sb-toggle').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+});
 
 // ── Watch mode: poll diff.json for live highlights ────────────────────────────
 (function(){

@@ -384,7 +384,7 @@ def _apply_ast_result(comp: Component, ast: dict, base_path: str,
 
 # ── File parser ───────────────────────────────────────────────────────────────
 
-def parse_file(path: Path) -> Optional[Component]:
+def parse_file(path: Path, skip_annotation_defs: bool = False) -> Optional[Component]:
     path_str = str(path).replace('\\', '/')
     if any(f in path_str for f in SKIP_FRAGMENTS):
         return None
@@ -395,6 +395,13 @@ def parse_file(path: Path) -> Optional[Component]:
     # Skip the Spring Boot main application class — not an architectural component
     if '@SpringBootApplication' in text:
         return None
+
+    # Skip annotation definition files — they are meta-annotations, not components
+    if skip_annotation_defs:
+        if is_java and re.search(r'(?:public\s+)?@interface\s+\w+', text):
+            return None
+        if not is_java and re.search(r'\bannotation\s+class\s+\w+', text):
+            return None
 
     if is_java:
         # Skip Java enums, interfaces without Spring annotations (pure contracts),
@@ -641,6 +648,11 @@ def _extract_endpoints(text: str, class_pos: int, base_path: str,
             if ann_name in HTTP_ANNOTATIONS:
                 http_method = HTTP_ANNOTATIONS[ann_name]
                 ann_body_str = am.group('ann_body') or ''
+                # @RequestMapping defaults to ANY — resolve from method = RequestMethod.XXX
+                if http_method == 'ANY' and ann_body_str:
+                    rm = re.search(r'method\s*=\s*(?:\[?\s*)?RequestMethod\.(\w+)', ann_body_str)
+                    if rm:
+                        http_method = rm.group(1).upper()
 
         if http_method is None:
             previous_method_start = m.start()
@@ -755,6 +767,42 @@ def _extract_handler_endpoints(text: str, class_pos: int,
     return endpoints
 
 
+_COMPOSED_ANN_RE = re.compile(
+    r'@(?P<meta>\w+)[^\n]*\n(?:[^\n]*\n)*?'   # one or more annotations
+    r'(?:public\s+)?@interface\s+(?P<name>\w+)',
+    re.MULTILINE,
+)
+
+def _discover_composed_annotations(files: list[Path]) -> dict[str, str]:
+    """
+    Scan Java/Kotlin files for custom annotation definitions that are themselves
+    annotated with a known role annotation (e.g. @RestController on @interface
+    RestApiController). Returns {custom_name: role} to merge into ROLE_ANNOTATIONS.
+    """
+    discovered: dict[str, str] = {}
+    for f in files:
+        if f.suffix not in ('.java', '.kt'):
+            continue
+        try:
+            text = f.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        if '@interface' not in text and 'annotation class' not in text:
+            continue
+        # Java: @interface
+        for m in _COMPOSED_ANN_RE.finditer(text):
+            meta = m.group('meta')
+            name = m.group('name')
+            if meta in ROLE_ANNOTATIONS and name not in ROLE_ANNOTATIONS:
+                discovered[name] = ROLE_ANNOTATIONS[meta]
+        # Kotlin: annotation class
+        for m in re.finditer(r'@(\w+)[^\n]*\nannotation\s+class\s+(\w+)', text):
+            meta, name = m.group(1), m.group(2)
+            if meta in ROLE_ANNOTATIONS and name not in ROLE_ANNOTATIONS:
+                discovered[name] = ROLE_ANNOTATIONS[meta]
+    return discovered
+
+
 def scan(root: Path) -> tuple[list[Component], list[str], int]:
     """Returns (components, warnings, ast_enriched_count)."""
     components: list[Component] = []
@@ -770,14 +818,31 @@ def scan(root: Path) -> tuple[list[Component], list[str], int]:
             file=sys.stderr,
         )
         sys.exit(1)
-    for src_file in sorted(all_files, key=lambda p: str(p)):
-        try:
-            comp = parse_file(src_file)
-            if comp:
-                components.append(comp)
-        except Exception as e:
-            parse_errors += 1
-            warnings.append(f'Could not parse {src_file.name}: {e}')
+
+    # Pre-pass: find composed/meta-annotations and temporarily extend role map.
+    # We restore the global after the scan so watch-mode scans of different
+    # projects don't leak each other's custom annotations.
+    composed = _discover_composed_annotations(all_files)
+    _added_keys: list[str] = []
+    if composed:
+        for k, v in composed.items():
+            if k not in ROLE_ANNOTATIONS:
+                ROLE_ANNOTATIONS[k] = v
+                _added_keys.append(k)
+        print(f'  Discovered composed annotations: {", ".join(f"@{k}" for k in _added_keys)}', file=sys.stderr)
+
+    try:
+        for src_file in sorted(all_files, key=lambda p: str(p)):
+            try:
+                comp = parse_file(src_file, skip_annotation_defs=True)
+                if comp:
+                    components.append(comp)
+            except Exception as e:
+                parse_errors += 1
+                warnings.append(f'Could not parse {src_file.name}: {e}')
+    finally:
+        for k in _added_keys:
+            ROLE_ANNOTATIONS.pop(k, None)
 
     if parse_errors:
         warnings.append(f'{parse_errors} file(s) could not be parsed — regex fallback used')

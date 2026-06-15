@@ -10,9 +10,6 @@ import functools
 import webbrowser
 from pathlib import Path
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-
 from .scan import scan
 from .resolve import resolve
 from .serve import run_once
@@ -40,6 +37,13 @@ def _resolve_source_root(given: Path) -> Path:
 
 def _watch(args, root: Path, html_path: Path) -> None:
     """Block until Ctrl+C, re-scanning on .kt/.java/.py file changes."""
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+    except ImportError:
+        print('Error: watchdog is required for --watch. Install it with: pip install watchdog', file=sys.stderr)
+        sys.exit(1)
+
     _EXTS = {'.kt', '.java', '.groovy', '.kts'}
     _cooldown = 2.0  # seconds — avoid double-scan on multi-file saves
 
@@ -77,6 +81,10 @@ def _watch(args, root: Path, html_path: Path) -> None:
 
 
 def main() -> None:
+    # `codemap live [root]` — shorthand for --serve --watch --debug-diff
+    if len(sys.argv) >= 2 and sys.argv[1] == 'live':
+        sys.argv = [sys.argv[0]] + sys.argv[2:] + ['--serve', '--watch', '--debug-diff']
+
     p = argparse.ArgumentParser(
         description='Generate an interactive Spring Boot architecture map.'
     )
