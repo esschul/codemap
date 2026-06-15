@@ -772,17 +772,21 @@ def _extract_handler_endpoints(text: str, class_pos: int,
     return endpoints
 
 
-_COMPOSED_ANN_RE = re.compile(
-    r'@(?P<meta>\w+)[^\n]*\n(?:[^\n]*\n)*?'   # one or more annotations
-    r'(?:public\s+)?@interface\s+(?P<name>\w+)',
-    re.MULTILINE,
-)
+# Matches a Java @interface declaration
+_JAVA_IFACE_RE = re.compile(r'(?:public\s+)?@interface\s+(\w+)', re.MULTILINE)
+# Matches a Kotlin annotation class declaration
+_KT_ANN_CLASS_RE = re.compile(r'annotation\s+class\s+(\w+)', re.MULTILINE)
+# Extracts annotation names from preamble text (e.g. @RestController, @Target(...))
+_ANN_NAME_RE = re.compile(r'@(\w+)')
+
 
 def _discover_composed_annotations(files: list[Path]) -> dict[str, str]:
     """
     Scan Java/Kotlin files for custom annotation definitions that are themselves
-    annotated with a known role annotation (e.g. @RestController on @interface
-    RestApiController). Returns {custom_name: role} to merge into ROLE_ANNOTATIONS.
+    meta-annotated with a known role annotation (e.g. @RestController on @interface
+    RestApiController). Inspects the full preamble before each declaration so that
+    @Target, @Retention, @RestController ordering doesn't matter.
+    Returns {custom_name: role} to merge into ROLE_ANNOTATIONS.
     """
     discovered: dict[str, str] = {}
     for f in files:
@@ -794,17 +798,21 @@ def _discover_composed_annotations(files: list[Path]) -> dict[str, str]:
             continue
         if '@interface' not in text and 'annotation class' not in text:
             continue
-        # Java: @interface
-        for m in _COMPOSED_ANN_RE.finditer(text):
-            meta = m.group('meta')
-            name = m.group('name')
-            if meta in ROLE_ANNOTATIONS and name not in ROLE_ANNOTATIONS:
-                discovered[name] = ROLE_ANNOTATIONS[meta]
-        # Kotlin: annotation class
-        for m in re.finditer(r'@(\w+)[^\n]*\nannotation\s+class\s+(\w+)', text):
-            meta, name = m.group(1), m.group(2)
-            if meta in ROLE_ANNOTATIONS and name not in ROLE_ANNOTATIONS:
-                discovered[name] = ROLE_ANNOTATIONS[meta]
+
+        decl_re = _JAVA_IFACE_RE if f.suffix == '.java' else _KT_ANN_CLASS_RE
+        for m in decl_re.finditer(text):
+            name = m.group(1)
+            if name in ROLE_ANNOTATIONS or name in discovered:
+                continue
+            # Inspect the preamble: everything from the previous declaration (or
+            # start of file) up to this declaration.
+            preamble_start = max(0, text.rfind('\n\n', 0, m.start()))
+            preamble = text[preamble_start:m.start()]
+            for ann_m in _ANN_NAME_RE.finditer(preamble):
+                meta = ann_m.group(1)
+                if meta in ROLE_ANNOTATIONS:
+                    discovered[name] = ROLE_ANNOTATIONS[meta]
+                    break
     return discovered
 
 

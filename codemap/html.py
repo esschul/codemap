@@ -2411,7 +2411,7 @@ document.getElementById('sb-toggle').addEventListener('click', () => {
   }
 
   function poll() {
-    fetch('/diff.json?_=' + Date.now())
+    fetch('diff.json?_=' + Date.now())
       .then(r => r.json())
       .then(d => {
         if (knownTs === null) { knownTs = d.ts; return; }
