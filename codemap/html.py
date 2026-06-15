@@ -1944,6 +1944,40 @@ function showNodeDetail(name) {
       </div>
     </div>`;
 
+    // Heatmap color explanation
+    if (hmMode !== 'off') {
+      const g = comp.git;
+      let colorDot = '';
+      let colorExpl = '';
+      if (hmMode === 'recent') {
+        const ageDays = g ? Math.round((Date.now()/1000 - g.lastChangedTs) / 86400) : null;
+        const label = ageDays === null ? 'No git data' : ageDays === 0 ? 'Changed today' : ageDays === 1 ? 'Changed yesterday' : `Changed ${ageDays} days ago`;
+        const t = g ? Math.max(0, Math.min(1, 1 - (ageDays / 365))) : 0;
+        colorDot = hmColor(t);
+        colorExpl = `<b style="color:${colorDot}">${label}</b> — nodes changed more recently are warmer.`;
+      } else if (hmMode === 'churn') {
+        const commits = g?.commits12m ?? 0;
+        const { max } = _normalizeHeat();
+        const t = max > 0 ? Math.log1p(commits) / Math.log1p(max) : 0;
+        colorDot = hmColor(t);
+        colorExpl = `<b style="color:${colorDot}">${commits} commits in the last 12 months</b> — more commits = more blue-purple.`;
+      } else if (hmMode === 'risk') {
+        const commits = g?.commits12m ?? 0;
+        const deps = comp.dependents || 0;
+        const { max } = _normalizeHeat();
+        const score = _riskScore(comp);
+        const t = max > 0 ? score / max : 0;
+        colorDot = hmColor(t);
+        if (commits === 0 && deps === 0) {
+          colorExpl = `<b style="color:${colorDot}">No risk signal</b> — no recent commits and no dependents.`;
+        } else {
+          colorExpl = `<b style="color:${colorDot}">${commits} commits × ${deps} dependent${deps !== 1 ? 's' : ''}</b> — risk = churn × how many components depend on this one.`;
+        }
+      }
+      html += `<div class="nd-row"><div class="nd-label">Color (${hmMode})</div>
+        <div class="nd-val" style="font-size:11px">${colorExpl}</div></div>`;
+    }
+
     // Annotations
     if (comp.springAnnotations?.length) {
       html += `<div class="nd-row"><div class="nd-label">Spring annotations</div><div class="nd-val">`;
