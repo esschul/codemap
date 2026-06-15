@@ -1719,10 +1719,10 @@ function hmColor(t) {
   ];
   const riskStops = [
     [0,   [156, 163, 175]], // no risk: gray-400
-    [0.2, [254, 243, 199]], // low: yellow-100
-    [0.5, [251, 146,  60]], // orange-400
-    [0.75,[220,  38,  38]], // red-600
-    [1,   [ 69,  10,  10]], // highest: red-950
+    [0.2, [190, 242, 100]], // low: lime-300
+    [0.5, [234, 179,   8]], // yellow-500
+    [0.75,[180,  83,   9]], // amber-800
+    [1,   [ 92,  45,   2]], // highest: amber-950
   ];
   const stops = hmMode === 'churn' ? churnStops : hmMode === 'risk' ? riskStops : recentStops;
   let lo = stops[0], hi = stops[stops.length-1];
@@ -1855,7 +1855,7 @@ function _applyHeatmap() {
     document.getElementById('hm-legend-bar').title = hotName ? `Most commits in 12m: ${hotName} (${max})` : '';
   } else {
     document.getElementById('hm-legend-bar').style.background =
-      'linear-gradient(to right,#9ca3af,#fef3c7,#fb923c,#dc2626,#450a0a)';
+      'linear-gradient(to right,#9ca3af,#bef264,#eab308,#b45309,#5c2d0e)';
     document.getElementById('hm-legend-lo').textContent = 'low risk';
     const hotComp = hotName ? COMP[hotName] : null;
     const hotChurn = hotComp?.git?.commits12m ?? 0;
