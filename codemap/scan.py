@@ -62,7 +62,7 @@ HTTP_ANNOTATIONS: dict[str, str] = {
 
 # Injected type patterns → inferred external system label
 EXTERNAL_HINTS: list[tuple[str, str]] = [
-    (r'JpaRepository|CrudRepository|MongoRepository|R2dbcRepository|JdbcTemplate|NamedParameterJdbcTemplate', 'database'),
+    (r'JpaRepository|CrudRepository|MongoRepository|R2dbcRepository|JdbcTemplate|NamedParameterJdbcTemplate|EntityManager|PersistenceContext', 'database'),
     (r'KafkaTemplate|KafkaSender|KafkaProducer',      'kafka'),
     (r'RestTemplate|WebClient|FeignClient|HttpClient|RestClient', 'http'),
     (r'AmazonS3|S3Client|S3AsyncClient',              's3'),
@@ -481,7 +481,14 @@ def parse_file(path: Path, skip_annotation_defs: bool = False) -> Optional[Compo
 
     # External systems: from injected types + class body
     all_types = list(field_map.values())
-    externals = _infer_externals(all_types, supertype_snippet + text[class_pos:class_pos + 2000])
+    body_snippet = supertype_snippet + text[class_pos:class_pos + 2000]
+    externals = _infer_externals(all_types, body_snippet)
+
+    # Repositories that extend an abstract JPA/DAO base class won't declare
+    # EntityManager themselves — infer database from the supertype name.
+    if kind == 'REPOSITORY' and 'database' not in externals:
+        if re.search(r'\bextends\s+\w*(Jpa|Jdbc|Abstract\w*Dao|Abstract\w*Repository)\w*', body_snippet, re.IGNORECASE):
+            externals.append('database')
 
     # @FeignClient(name = "some-service") → add that service name as external
     fc_m = re.search(r'@FeignClient\s*\(\s*(?:name\s*=\s*)?["\']([^"\']+)["\']', preamble)
