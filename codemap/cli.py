@@ -152,6 +152,8 @@ def main() -> None:
     p.add_argument('--no-html', action='store_true', help='Skip HTML generation')
     p.add_argument('--no-md',   action='store_true', help='Skip Markdown generation')
     p.add_argument('--list', action='store_true', help='Print component table to stdout')
+    p.add_argument('--json', action='store_true', help='Print the full component/endpoint graph as JSON')
+    p.add_argument('--json-out', default='', metavar='FILE', help='Write --json output to FILE instead of stdout')
     p.add_argument('--serve', action='store_true', help='Serve HTML via localhost and open in browser')
     p.add_argument('--port', type=int, default=8742, help='Port for --serve (default: 8742)')
     p.add_argument('--watch', action='store_true', help='Re-scan every --interval seconds')
@@ -177,6 +179,26 @@ def main() -> None:
             print(f'{c.name:<42} {c.kind:<12} {c.domain or "—":<18} {ext}')
         return
 
+    if args.json:
+        import dataclasses
+        import json as _json
+
+        components, warnings, files_scanned = scan(root)
+        resolve(components)
+        payload = {
+            'root': str(root),
+            'filesScanned': files_scanned,
+            'warnings': warnings,
+            'components': [dataclasses.asdict(c) for c in components],
+        }
+        text = _json.dumps(payload, indent=2)
+        if args.json_out:
+            Path(args.json_out).write_text(text, encoding='utf-8')
+            print(f'Wrote {args.json_out}', file=sys.stderr)
+        else:
+            print(text)
+        return
+
     if args.html != 'appmap.html':
         html_path = Path(args.html)
     elif args.name:
@@ -200,9 +222,18 @@ def main() -> None:
                 # /file?path=/abs/path/to/File.kt — serve raw source for Ollama prompts
                 if self.path.startswith('/file?path='):
                     import urllib.parse
+                    _ALLOWED_SUFFIXES = {'.kt', '.java', '.kts', '.groovy'}
                     raw = self.path[len('/file?path='):]
-                    file_path = Path(urllib.parse.unquote(raw))
-                    # Security: only serve files under known source roots
+                    file_path = Path(urllib.parse.unquote(raw)).resolve()
+                    source_root = root.resolve()
+                    try:
+                        file_path.relative_to(source_root)  # raises ValueError if outside root
+                    except ValueError:
+                        self.send_error(403, 'Path outside scanned root')
+                        return
+                    if file_path.suffix not in _ALLOWED_SUFFIXES:
+                        self.send_error(403, 'File type not allowed')
+                        return
                     try:
                         content = file_path.read_text(encoding='utf-8', errors='replace')
                         encoded = content.encode('utf-8')

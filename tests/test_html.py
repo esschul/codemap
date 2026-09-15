@@ -1,9 +1,16 @@
 import sys
+import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from codemap.model import Component, Endpoint
-from codemap.html import generate_html, _html_escape, _json_for_script
+from codemap.html import generate_html, _html_escape, _json_for_script, HTML_TEMPLATE
 
 
 def _ctrl(name='Ctrl', endpoints=None, domain=''):
@@ -80,3 +87,99 @@ def test_generate_html_scan_meta_version():
     from codemap.html import _SCANNER_VERSION
     html = generate_html([_ctrl()], title='T')
     assert _SCANNER_VERSION in html
+
+
+def _extract_js_function(name: str) -> str:
+    start = HTML_TEMPLATE.index(f'function {name}')
+    end = HTML_TEMPLATE.index("\ndocument.getElementById('mermaid-modal-close')", start)
+    return HTML_TEMPLATE[start:end]
+
+
+def _normalise_sequence_with_node(raw: str) -> str:
+    if not shutil.which('node'):
+        pytest.skip('node is required for frontend normalizer tests')
+    js = (
+        _extract_js_function('_normaliseSequenceDiagram')
+        + '\nconst input = '
+        + json.dumps(raw)
+        + ';\nprocess.stdout.write(JSON.stringify(_normaliseSequenceDiagram(input)));'
+    )
+    result = subprocess.run(
+        ['node', '-e', js],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_mermaid_normalizer_reuses_model_aliases():
+    result = _normalise_sequence_with_node(
+        '''
+        sequenceDiagram
+          participant U as User
+          participant S as CustomerService
+          U->>S: getCustomer
+          S-->>U: customer
+        '''
+    )
+
+    assert 'participant P1 as User' in result
+    assert 'participant P2 as CustomerService' in result
+    assert 'P1->>P2: getCustomer' in result
+    assert 'P2-->>P1: customer' in result
+    assert not re.search(r'participant P\d+ as U(?:\n|$)', result)
+
+
+def test_mermaid_normalizer_drops_weak_abbreviation_participants():
+    result = _normalise_sequence_with_node(
+        '''
+        sequenceDiagram
+          participant CustomerManagementResource
+          participant CustomerManagementService
+          CustomerManagementResource->>CustomerManagementService: getCustomer
+          CustomerManagementService-->>CS-: ignored response
+          CS-->>CDAO-: ignored alias response
+          CDAO-->>...: ignored ellipsis response
+        '''
+    )
+
+    assert 'CustomerManagementResource' in result
+    assert 'CustomerManagementService' in result
+    assert 'CS-' not in result
+    assert 'CDAO-' not in result
+    assert '...' not in result
+
+
+def test_mermaid_normalizer_caps_participant_count():
+    result = _normalise_sequence_with_node(
+        '''
+        sequenceDiagram
+          AService->>BService: call
+          BService->>CService: call
+          CService->>DService: call
+          DService->>EService: call
+          EService->>FService: call
+          FService->>GService: call
+          GService->>HService: call
+        '''
+    )
+
+    assert result.count('participant ') == 6
+    assert 'GService' not in result
+    assert 'HService' not in result
+
+
+def test_mermaid_normalizer_removes_visible_label_quotes():
+    result = _normalise_sequence_with_node(
+        '''
+        sequenceDiagram
+          participant C as "CustomerDao"
+          participant S as “CustomerService”
+          C->>S: findCustomer
+        '''
+    )
+
+    assert 'CustomerDao' in result
+    assert 'CustomerService' in result
+    assert '"' not in result

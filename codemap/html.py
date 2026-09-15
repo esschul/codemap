@@ -606,7 +606,7 @@ body.light .m-ANY{background:#f1f5f9;color:#64748b}
 
 /* Main */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-#chain-area{flex:1;min-height:0;overflow:auto;position:relative;background:var(--bg)}
+#chain-area{flex:1;min-height:0;overflow:auto;position:relative;background:var(--bg);user-select:none}
 #chain-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
 #chain-empty-inner{display:flex;flex-direction:column;align-items:center;gap:12px;opacity:.3}
 #chain-empty-inner svg{color:var(--text)}
@@ -820,10 +820,36 @@ footer code{font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim)}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'strict'});</script>
 </head>
 <body>
+<div id="mermaid-modal" style="display:none;position:fixed;inset:0;z-index:1000;
+  background:#0b1120;flex-direction:column">
+  <div style="background:#111827;border-bottom:1px solid #1f2937;
+    display:flex;flex-direction:column;overflow:hidden;min-height:100vh">
+    <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #1f2937;flex-shrink:0">
+      <span style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
+        <span id="mermaid-modal-title" style="font-size:13px;font-weight:700;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+        <span id="mermaid-modal-subtitle" style="font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+      </span>
+      <button id="mermaid-zoom-out" style="background:transparent;border:1px solid #374151;border-radius:4px;
+        color:#94a3b8;font-size:11px;padding:3px 8px;margin-right:6px;cursor:pointer">−</button>
+      <button id="mermaid-zoom-fit" style="background:transparent;border:1px solid #374151;border-radius:4px;
+        color:#94a3b8;font-size:11px;padding:3px 8px;margin-right:6px;cursor:pointer">Fit</button>
+      <button id="mermaid-zoom-in" style="background:transparent;border:1px solid #374151;border-radius:4px;
+        color:#94a3b8;font-size:11px;padding:3px 8px;margin-right:12px;cursor:pointer">+</button>
+      <button id="mermaid-modal-close" style="background:none;border:none;color:#6b7280;
+        font-size:18px;cursor:pointer;line-height:1">✕</button>
+    </div>
+    <div style="flex:1;overflow:auto;padding:28px 36px;display:flex;align-items:flex-start;justify-content:center;background:#0b1120">
+      <div id="mermaid-modal-body" style="width:100%;min-height:100%;display:flex;align-items:flex-start;justify-content:center"></div>
+    </div>
+  </div>
+</div>
 <header>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
        stroke="#3b82f6" stroke-width="2" stroke-linecap="round">
@@ -1091,11 +1117,14 @@ function renderChainSVG(ctrlName, ep) {
 
   const methodColor = {GET:'#4ade80',POST:'#60a5fa',PUT:'#fbbf24',DELETE:'#f87171',PATCH:'#c084fc',ANY:'#64748b'};
   const mc = methodColor[ep.method] || '#64748b';
+  const mapTitle = document.querySelector('h1')?.textContent || '';
+  const verbW = ep.method.length * 7 + 20;
   const title = `
-    <rect x="0" y="0" width="${svgW}" height="44" fill="none"/>
-    <rect x="${PAD_X}" y="13" width="${ep.method.length * 7 + 20}" height="22" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1.5"/>
-    <text x="${PAD_X + 10}" y="29" font-family="system-ui" font-size="11" font-weight="800" fill="${mc}">${ep.method}</text>
-    <text x="${PAD_X + ep.method.length * 7 + 36}" y="29" font-family="'SF Mono','Fira Code',monospace" font-size="12" fill="#94a3b8">${escXml(ep.path)}</text>
+    <rect x="0" y="0" width="${svgW}" height="60" fill="none"/>
+    <text x="${PAD_X}" y="16" font-family="system-ui" font-size="10" fill="#475569">${escXml(mapTitle)} · ${escXml(ctrlName)}.${escXml(ep.handler)}()</text>
+    <rect x="${PAD_X}" y="24" width="${verbW}" height="22" rx="4" fill="${mc}22" stroke="${mc}" stroke-width="1.5"/>
+    <text x="${PAD_X + 10}" y="40" font-family="system-ui" font-size="11" font-weight="800" fill="${mc}">${ep.method}</text>
+    <text x="${PAD_X + verbW + 16}" y="40" font-family="'SF Mono','Fira Code',monospace" font-size="13" font-weight="600" fill="#e2e8f0">${escXml(ep.path)}</text>
   `;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}">
@@ -1300,6 +1329,7 @@ function renderSearch(q) {
 
 // ── Ollama discovery ──────────────────────────────────────────────────────────
 let ollamaModel = null;
+const _seqDiagramCache = new Map(); // component name → mermaid source
 let ollamaReady = false;  // true once discovery finishes (model found or not)
 const ollamaReadyCallbacks = [];
 function onOllamaReady(fn) {
@@ -1313,7 +1343,7 @@ function onOllamaReady(fn) {
     if (r.ok) {
       const data = await r.json();
       const models = (data.models || []).map(m => m.name);
-      const preferred = ['llama3', 'llama3.2', 'mistral', 'phi3', 'phi', 'gemma', 'qwen'];
+      const preferred = ['qwen2.5-coder', 'qwen2.5', 'phi3', 'phi', 'mistral', 'llama3.2', 'llama3.1', 'llama3', 'gemma'];
       ollamaModel = models.find(n => preferred.some(p => n.startsWith(p))) || models[0] || null;
     }
   } catch { /* Ollama not running — silent */ }
@@ -1367,6 +1397,79 @@ function buildEvidencePrompt(ctrlName, ep) {
   );
 }
 
+function _formatFlowStep(step) {
+  if (step.external) return `${step.from} -> [${step.external}]`;
+  if (step.ambiguous) return `${step.from} -> [${step.ambiguous}] (ambiguous: ${(step.implementations || []).join(', ')})`;
+  if (step.truncated) return `${step.from} -> ... (truncated at depth ${step.depth})`;
+  return `${step.from} -> ${step.to}()`;
+}
+
+function _componentInEndpointFlow(componentName, ctx) {
+  if (!ctx) return false;
+  if (ctx.ctrlName === componentName) return true;
+  if ((ctx.ep.calls || []).includes(componentName)) return true;
+  return (ctx.ep.flow || []).some(step => {
+    const fromComp = String(step.from || '').split('.')[0];
+    const toComp = String(step.to || '').split('.')[0];
+    return fromComp === componentName || toComp === componentName;
+  });
+}
+
+function _sequenceContextTitle(componentName) {
+  if (_componentInEndpointFlow(componentName, selectedEndpointContext)) {
+    const ep = selectedEndpointContext.ep;
+    return {
+      title: `${ep.method} ${ep.path}`,
+      subtitle: `${selectedEndpointContext.ctrlName}.${ep.handler}() · focused on ${componentName}`,
+    };
+  }
+  return {
+    title: componentName,
+    subtitle: 'Component-level sequence diagram',
+  };
+}
+
+function _buildSequencePrompt(componentName, comp, src) {
+  const ctx = _componentInEndpointFlow(componentName, selectedEndpointContext)
+    ? selectedEndpointContext
+    : null;
+
+  if (ctx) {
+    const ep = ctx.ep;
+    const flow = ep.flow || [];
+    const flowLines = flow.length
+      ? flow.map(_formatFlowStep).join('\n')
+      : (ep.fieldCalls || []).map(fc => `${ctx.ctrlName}.${ep.handler} -> ${fc.type}.${fc.method}()`).join('\n');
+    const focus = flow
+      .filter(step => {
+        const fromComp = String(step.from || '').split('.')[0];
+        const toComp = String(step.to || '').split('.')[0];
+        return fromComp === componentName || toComp === componentName;
+      })
+      .map(_formatFlowStep)
+      .join('\n') || '(selected component is the entrypoint or has no method-level step)';
+
+    return (
+      'You are a software architect. Generate a valid Mermaid sequenceDiagram for ONLY the selected codemap endpoint flow below. ' +
+      'Do not choose another public method. Do not invent calls outside the evidence. Use the source only to improve method labels when it matches the evidence. ' +
+      'Output ONLY raw Mermaid, no markdown fences, no explanation. Use at most 6 participants. Omit DTOs, primitive values, request objects, response objects, and validation result objects unless they are the main actor. ' +
+      'Prefer controller, service, repository, client, and external system participants. Use only these line forms: sequenceDiagram, participant Alias as Label, Alias->>Alias: message, Alias-->>Alias: message, Note over Alias: text. Every arrow line MUST contain a colon and a short message. Use simple participant aliases with only letters and numbers.\n\n' +
+      `Selected endpoint: ${ep.method} ${ep.path}\n` +
+      `Handler: ${ctx.ctrlName}.${ep.handler}()\n` +
+      `Selected component: ${componentName}\n` +
+      `Focus steps for selected component:\n${focus}\n\n` +
+      `Codemap call flow evidence:\n${flowLines || '(no method-level evidence)'}\n\n` +
+      `Relevant source for ${componentName}:\n${src.slice(0, 3000)}`
+    );
+  }
+
+  return (
+    'You are a software architect. Generate a valid Mermaid sequenceDiagram for the main Spring component flow visible in this source file. ' +
+    'Output ONLY raw Mermaid, no markdown fences, no explanation. Use at most 6 participants. Omit DTOs, primitive values, request objects, response objects, and validation result objects unless they are the main actor. Prefer controller, service, repository, client, and external system participants. Use only these line forms: sequenceDiagram, participant Alias as Label, Alias->>Alias: message, Alias-->>Alias: message, Note over Alias: text. Every arrow line MUST contain a colon and a short message. Use simple participant aliases with only letters and numbers.\n\n' +
+    `Component: ${componentName}\nSource:\n${src.slice(0, 3000)}`
+  );
+}
+
 async function summariseEndpoint(ctrlName, ep, outputEl) {
   outputEl.textContent = '…';
   if (!ollamaReady) {
@@ -1389,31 +1492,81 @@ async function summariseEndpoint(ctrlName, ep, outputEl) {
     });
     outputEl.textContent = '';
     outputEl.style.display = 'none';
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += dec.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const chunk = JSON.parse(line);
-        if (chunk.response) {
-          if (!outputEl.style.display || outputEl.style.display === 'none') outputEl.style.display = '';
-          outputEl.textContent += chunk.response;
-        }
+    await _readOllamaStream(resp, chunk => {
+      if (chunk.response) {
+        if (!outputEl.style.display || outputEl.style.display === 'none') outputEl.style.display = '';
+        outputEl.textContent += chunk.response;
       }
-    }
+    });
   } catch (e) {
     outputEl.textContent = `Error: ${e.message}`;
   }
 }
 
+async function _readOllamaStream(resp, onChunk) {
+  if (!resp.ok) throw new Error(`Ollama returned HTTP ${resp.status}`);
+  if (!resp.body) throw new Error('Ollama response had no body');
+
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buffer = '';
+
+  function consumeBuffer(final=false) {
+    while (true) {
+      const text = buffer.trimStart();
+      const skipped = buffer.length - text.length;
+      if (skipped) buffer = text;
+      if (!buffer) return;
+
+      const end = _findJsonObjectEnd(buffer);
+      if (end === -1) {
+        if (final) throw new Error('Incomplete JSON from Ollama');
+        return;
+      }
+
+      const jsonText = buffer.slice(0, end + 1);
+      buffer = buffer.slice(end + 1);
+      onChunk(JSON.parse(jsonText));
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += dec.decode(value, { stream: true });
+    consumeBuffer(false);
+  }
+  buffer += dec.decode();
+  consumeBuffer(true);
+}
+
+function _findJsonObjectEnd(s) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 // ── Endpoint selection ────────────────────────────────────────────────────────
+let selectedEndpointContext = null;
+
 function selectEndpoint(ctrlName, ep, itemEl){
+  selectedEndpointContext = {ctrlName, ep};
   document.querySelectorAll('.ep-item').forEach(el=>el.classList.remove('active'));
   if(itemEl) itemEl.classList.add('active');
 
@@ -1520,6 +1673,7 @@ function selectEndpoint(ctrlName, ep, itemEl){
 }
 
 function resetFilter(){
+  selectedEndpointContext = null;
   document.getElementById('chain-svg').innerHTML = '';
   document.getElementById('chain-empty').classList.remove('hidden');
   document.querySelectorAll('.ep-item').forEach(el=>el.classList.remove('active'));
@@ -2068,13 +2222,13 @@ function showNodeDetail(name) {
 
     // Sequence diagram via Ollama
     if (comp.file) {
+      const hasSelectedFlow = _componentInEndpointFlow(name, selectedEndpointContext);
       html += `<div class="nd-row"><div class="nd-label">Sequence diagram</div>
         <div class="nd-val">
           <button id="btn-seqdiag" style="font-size:11px;padding:3px 10px;background:var(--accent);
-            border:none;border-radius:4px;color:#fff;cursor:pointer">
-            Generate with Ollama
-          </button>
-          <div id="seqdiag-out" style="margin-top:8px;font-size:11px;display:none"></div>
+            border:none;border-radius:4px;color:#fff;cursor:pointer">${hasSelectedFlow ? 'Generate for selected flow' : 'Generate from component'}</button>
+          ${hasSelectedFlow ? `<div style="font-size:10px;color:var(--text-muted);margin-top:5px">Uses selected endpoint: <code>${escHtml(selectedEndpointContext.ep.method)} ${escHtml(selectedEndpointContext.ep.path)}</code></div>` : ''}
+          <span id="seqdiag-status" style="font-size:10px;color:var(--text-muted);margin-left:8px"></span>
         </div>
       </div>`;
     }
@@ -2097,25 +2251,32 @@ function showNodeDetail(name) {
   // Wire up sequence diagram button
   const btnSeq = document.getElementById('btn-seqdiag');
   if (btnSeq && comp?.file) {
+    if (_seqDiagramCache.has(name)) btnSeq.textContent = 'Show diagram';
+
     btnSeq.addEventListener('click', async () => {
-      const out = document.getElementById('seqdiag-out');
+      const status = document.getElementById('seqdiag-status');
+
+      // Serve from cache instantly
+      if (_seqDiagramCache.has(name)) {
+        await _showMermaidModal(_sequenceContextTitle(name), _seqDiagramCache.get(name));
+        return;
+      }
+
       btnSeq.disabled = true;
-      btnSeq.textContent = 'Loading file…';
-      out.style.display = 'block';
-      out.textContent = '';
       try {
         const fileResp = await fetch('/file?path=' + encodeURIComponent(comp.file));
         if (!fileResp.ok) throw new Error('Could not read file');
         const src = await fileResp.text();
 
         if (!ollamaModel) {
-          out.textContent = 'Ollama not available. Start it with: ollama serve';
-          btnSeq.disabled = false; btnSeq.textContent = 'Generate with Ollama';
+          status.textContent = 'Ollama not available — run: ollama serve';
+          btnSeq.disabled = false;
           return;
         }
 
-        btnSeq.textContent = `Using ${ollamaModel}…`;
-        const prompt = 'You are a software architect. Given this Spring Boot class, generate a Mermaid sequence diagram showing the internal method call flow for the most important public method. Show only method calls — no implementation details, no comments. Output only the Mermaid code block, nothing else.\n\n```kotlin\n' + src.slice(0, 6000) + '\n```';
+        status.textContent = '';
+        _showMermaidSpinner(_sequenceContextTitle(name), ollamaModel);
+        const prompt = _buildSequencePrompt(name, comp, src);
 
         const resp = await fetch('http://localhost:11434/api/generate', {
           method: 'POST',
@@ -2123,30 +2284,218 @@ function showNodeDetail(name) {
           body: JSON.stringify({ model: ollamaModel, prompt, stream: true }),
         });
 
-        const reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += dec.decode(value, { stream: true });
-          const lines = buffer.split('\\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const chunk = JSON.parse(line);
-            if (chunk.response) out.textContent += chunk.response;
-          }
+        let raw = '';
+        await _readOllamaStream(resp, chunk => {
+          if (chunk.response) raw += chunk.response;
+        });
+
+        const mermaidSrc = _normaliseSequenceDiagram(raw);
+        if (!mermaidSrc) {
+          console.warn('[codemap] raw Ollama output that failed normalisation:\n', raw);
+          document.getElementById('mermaid-modal').style.display = 'none';
+          status.textContent = 'Model did not return a valid sequenceDiagram — try again';
+          btnSeq.disabled = false;
+          return;
         }
-        btnSeq.textContent = 'Regenerate';
+        _seqDiagramCache.set(name, mermaidSrc);
+        await _showMermaidModal(_sequenceContextTitle(name), mermaidSrc);
+        btnSeq.textContent = 'Show diagram';
       } catch (e) {
-        out.textContent = 'Error: ' + e.message;
-        btnSeq.textContent = 'Generate with Ollama';
+        status.textContent = 'Error: ' + e.message;
       }
       btnSeq.disabled = false;
     });
   }
 }
+
+function _showMermaidSpinner(contextTitle, modelName) {
+  const modal = document.getElementById('mermaid-modal');
+  const body  = document.getElementById('mermaid-modal-body');
+  const title = typeof contextTitle === 'string' ? contextTitle : contextTitle.title;
+  document.getElementById('mermaid-modal-title').textContent = title + ' — sequence diagram';
+  document.getElementById('mermaid-modal-subtitle').textContent = `Generating with ${modelName}…`;
+  body.textContent = '';
+  const spinner = document.createElement('div');
+  spinner.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;padding:60px 0;color:#64748b;font-size:13px';
+  spinner.innerHTML = '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" style="animation:spin 1s linear infinite">' +
+    '<circle cx="18" cy="18" r="14" stroke="#1e3a5f" stroke-width="3"/>' +
+    '<path d="M18 4a14 14 0 0 1 14 14" stroke="#3b82f6" stroke-width="3" stroke-linecap="round"/>' +
+    '</svg><span>Generating diagram…</span>';
+  body.appendChild(spinner);
+  modal.style.display = 'flex';
+}
+
+async function _showMermaidModal(contextTitle, mermaidSrc) {
+  const modal = document.getElementById('mermaid-modal');
+  const body  = document.getElementById('mermaid-modal-body');
+  const title = typeof contextTitle === 'string' ? contextTitle : contextTitle.title;
+  const subtitle = typeof contextTitle === 'string' ? 'Sequence diagram' : contextTitle.subtitle;
+  document.getElementById('mermaid-modal-title').textContent = title + ' — sequence diagram';
+  document.getElementById('mermaid-modal-subtitle').textContent = subtitle || '';
+  // Use textContent to set the Mermaid source — never innerHTML with model output
+  body.textContent = '';
+  const pre = document.createElement('div');
+  pre.className = 'mermaid';
+  pre.textContent = mermaidSrc;
+  body.appendChild(pre);
+  modal.style.display = 'flex';
+  try {
+    await mermaid.run({ nodes: [pre] });
+    const svg = pre.querySelector('svg');
+    if (svg) {
+      _wireMermaidZoom(svg);
+    }
+  } catch (e) {
+    pre.className = '';
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.style.color = '#fca5a5';
+    pre.textContent = 'Could not render Mermaid diagram:\\n' + e.message + '\\n\\n' + mermaidSrc;
+  }
+}
+
+let mermaidZoom = 1;
+
+function _svgViewWidth(svg) {
+  const vb = svg.getAttribute('viewBox');
+  if (vb) {
+    const parts = vb.split(/\s+/).map(Number);
+    if (parts.length === 4 && Number.isFinite(parts[2]) && parts[2] > 0) return parts[2];
+  }
+  const width = parseFloat(svg.getAttribute('width') || '');
+  return Number.isFinite(width) && width > 0 ? width : 1200;
+}
+
+function _applyMermaidZoom(svg) {
+  const baseWidth = Math.max(900, Math.min(1800, _svgViewWidth(svg)));
+  svg.removeAttribute('height');
+  svg.style.width = `${Math.round(baseWidth * mermaidZoom)}px`;
+  svg.style.maxWidth = 'none';
+  svg.style.height = 'auto';
+}
+
+function _wireMermaidZoom(svg) {
+  const body = document.getElementById('mermaid-modal-body');
+  const viewport = body.parentElement;
+  const wrapper = svg.parentElement;
+  if (wrapper) {
+    wrapper.style.width = 'max-content';
+    wrapper.style.minWidth = '100%';
+    wrapper.style.display = 'flex';
+    wrapper.style.justifyContent = 'center';
+  }
+  mermaidZoom = 1;
+  _applyMermaidZoom(svg);
+  if (viewport) {
+    viewport.scrollLeft = Math.max(0, (svg.getBoundingClientRect().width - viewport.clientWidth) / 2);
+    viewport.scrollTop = 0;
+  }
+
+  document.getElementById('mermaid-zoom-out').onclick = () => {
+    mermaidZoom = Math.max(0.5, mermaidZoom - 0.15);
+    _applyMermaidZoom(svg);
+  };
+  document.getElementById('mermaid-zoom-in').onclick = () => {
+    mermaidZoom = Math.min(2.2, mermaidZoom + 0.15);
+    _applyMermaidZoom(svg);
+  };
+  document.getElementById('mermaid-zoom-fit').onclick = () => {
+    const viewportWidth = viewport ? viewport.clientWidth - 72 : 980;
+    mermaidZoom = Math.max(0.45, Math.min(1.4, viewportWidth / Math.max(900, Math.min(1800, _svgViewWidth(svg)))));
+    _applyMermaidZoom(svg);
+  };
+}
+
+function _normaliseSequenceDiagram(raw) {
+  let text = String(raw || '')
+    .replace(/^```[a-z]*\n?/i, '')
+    .replace(/\n?```\s*$/i, '')
+    .trim();
+  const start = text.indexOf('sequenceDiagram');
+  if (start === -1) return '';
+  text = text.slice(start);
+
+  const out = ['sequenceDiagram'];
+  const aliases = new Map();
+  let aliasSeq = 1;
+  const maxParticipants = 6;
+
+  function cleanLabel(s, max=80) {
+    return String(s || '')
+      .replace(/["<>`{}[\]]/g, '')
+      .replace(/[()\n\r:;]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max);
+  }
+
+  function cleanMessage(s) {
+    return cleanLabel(s, 100) || 'call';
+  }
+
+  function isWeakParticipantLabel(s) {
+    const value = cleanLabel(s, 80);
+    if (!value || value === '...' || value === '.') return true;
+    if (/^[A-Z]{1,5}-?$/.test(value)) return true;
+    if (/^[A-Z]$/.test(value)) return true;
+    return false;
+  }
+
+  function addParticipant(alias, label) {
+    const aliasKey = cleanLabel(alias, 80);
+    const labelKey = cleanLabel(label, 80);
+    const key = aliasKey || labelKey;
+    if (!key) return '';
+    if (aliases.has(aliasKey)) return aliases.get(aliasKey);
+    if (aliases.has(labelKey)) return aliases.get(labelKey);
+    if (aliasSeq > maxParticipants) return '';
+    if (isWeakParticipantLabel(labelKey || aliasKey)) return '';
+    const clean = `P${aliasSeq++}`;
+    if (aliasKey) aliases.set(aliasKey, clean);
+    if (labelKey) aliases.set(labelKey, clean);
+    out.push(`participant ${clean} as ${cleanLabel(label || alias || clean, 80)}`);
+    return clean;
+  }
+
+  for (const rawLine of text.split(/\r?\n/).slice(1, 80)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('%%')) continue;
+    line = line.replace(/[“”]/g, '"').replace(/[’]/g, "'");
+
+    const participant = line.match(/^(?:participant|actor)\s+([A-Za-z0-9_.$]+)(?:\s+as\s+(.+))?$/i);
+    if (participant) {
+      addParticipant(participant[1], participant[2] || participant[1]);
+      continue;
+    }
+
+    const note = line.match(/^Note\s+(?:over|right of|left of)\s+([A-Za-z0-9_.$]+)\s*:\s*(.+)$/i);
+    if (note) {
+      const who = addParticipant(note[1], note[1]);
+      const msg = cleanMessage(note[2]);
+      if (who && msg) out.push(`Note over ${who}: ${msg}`);
+      continue;
+    }
+
+    const arrow = line.match(/^([A-Za-z0-9_.$]+)\s*(->>|-->>|->|-->|-x|--x)\s*([A-Za-z0-9_.$]+)\s*:\s*(.+)$/);
+    if (arrow) {
+      const from = addParticipant(arrow[1], arrow[1]);
+      const to = addParticipant(arrow[3], arrow[3]);
+      const msg = cleanMessage(arrow[4]);
+      if (from && to && msg) out.push(`${from}${arrow[2]}${to}: ${msg}`);
+    }
+  }
+
+  return out.length > 1 ? out.join('\n') : '';
+}
+
+document.getElementById('mermaid-modal-close').addEventListener('click', () => {
+  document.getElementById('mermaid-modal').style.display = 'none';
+});
+document.getElementById('mermaid-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('mermaid-modal').style.display = 'none';
+});
 
 // Inspector collapse toggle
 (function(){
@@ -2184,6 +2533,18 @@ document.getElementById('chain-area').addEventListener('click', e => {
   } else {
     showNodeDetail(node.dataset.name);
   }
+});
+
+// Double-click a node to generate sequence diagram directly
+document.getElementById('chain-area').addEventListener('dblclick', e => {
+  e.preventDefault();  // prevent text selection
+  const node = e.target.closest('[data-name]');
+  if (!node || !node.dataset.name) return;
+  const comp = COMP[node.dataset.name];
+  if (!comp?.file) return;
+  showNodeDetail(node.dataset.name);
+  // Small delay so the inspector renders the button before we click it
+  setTimeout(() => document.getElementById('btn-seqdiag')?.click(), 50);
 });
 
 // ── Scan metadata footer ──────────────────────────────────────────────────────

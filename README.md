@@ -111,6 +111,31 @@ GitHub Actions is GitHub's built-in automation — it's free for public repos an
 
 ---
 
+## Use as a Claude Code plugin
+
+Install codemap as a [Claude Code](https://claude.com/claude-code) plugin so
+it triggers automatically on prompts like "map this repo" or "trace the call
+chain for this endpoint" — in any Spring Boot repo, without having to
+remember flags:
+
+```
+/plugin marketplace add esschul/codemap
+/plugin install codemap@codemap
+```
+
+(non-interactive equivalent: `claude plugin marketplace add esschul/codemap && claude plugin install codemap@codemap`)
+
+This still requires the CLI itself:
+
+```bash
+pipx install git+https://github.com/esschul/codemap.git
+```
+
+See [`plugins/codemap/skills/codemap/SKILL.md`](plugins/codemap/skills/codemap/SKILL.md)
+for what the skill does and which prompts trigger it.
+
+---
+
 ## What it detects
 
 | Colour | Kind | Detected by |

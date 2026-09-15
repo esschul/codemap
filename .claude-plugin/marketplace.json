@@ -1,0 +1,22 @@
+{
+  "name": "codemap",
+  "owner": {
+    "name": "Espen Schulstad",
+    "url": "https://github.com/esschul"
+  },
+  "description": "Marketplace for the codemap Spring Boot architecture mapper plugin.",
+  "plugins": [
+    {
+      "name": "codemap",
+      "source": "./plugins/codemap",
+      "displayName": "codemap",
+      "description": "Interactive architecture mapper for Spring Boot (Kotlin/Java) applications — trace call chains from endpoint to service to repository to external system.",
+      "version": "1.3.0",
+      "author": {
+        "name": "Espen Schulstad"
+      },
+      "category": "development",
+      "tags": ["spring-boot", "architecture", "kotlin", "java", "visualization"]
+    }
+  ]
+}
