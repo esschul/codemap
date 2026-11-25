@@ -12,8 +12,27 @@ Known limitations (documented, not fixed):
 """
 from __future__ import annotations
 from .model import Component, Endpoint
+from .resolve import external_labels_for_type
 
 _STOP_KINDS = frozenset({'REPOSITORY', 'CLIENT', 'CACHE', 'MAPPER'})
+
+
+def method_externals(comp: Component, method: str) -> list[str]:
+    """External systems that a single method of `comp` can reach.
+
+    A component's external_systems come from two places:
+    - injected fields (KafkaTemplate → kafka): only methods that call that field reach it
+    - the class itself (@FeignClient name, JpaRepository supertype, …): every method reaches it
+
+    Without method-level evidence for `method` (e.g. an inherited repository
+    method like save()), all of the component's externals are returned.
+    """
+    calls = comp.method_field_calls.get(method)
+    if calls is None:
+        return list(comp.external_systems)
+    field_labels = {lbl for t in comp.field_map.values() for lbl in external_labels_for_type(t)}
+    used_labels = {lbl for fc in calls for lbl in external_labels_for_type(fc.get('type', ''))}
+    return [e for e in comp.external_systems if e not in field_labels or e in used_labels]
 
 
 def build_evidence(
@@ -81,7 +100,7 @@ def build_evidence(
                 'to': f'{target.name}.{called_method}',
             })
 
-            for ext in target.external_systems:
+            for ext in method_externals(target, called_method):
                 flow.append({'from': target.name, 'external': ext})
 
             if target.kind not in _STOP_KINDS:

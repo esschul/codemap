@@ -1,3 +1,4 @@
+import pytest
 import json
 import shutil
 import subprocess
@@ -108,9 +109,11 @@ def test_html_escapes_title_and_repo_derived_values():
 
 def test_java_ast_scanner_ignores_non_injected_fields():
     if not shutil.which("java"):
-        return
+        pytest.skip("java not on PATH")
 
-    jar = ROOT / "ast_scanner" / "target" / "ast-scanner.jar"
+    # Prefer a fresh Maven build if present, else the JAR bundled with the package
+    built = ROOT / "ast_scanner" / "target" / "ast-scanner.jar"
+    jar = built if built.exists() else ROOT / "codemap" / "ast-scanner.jar"
     tmp = Path(tempfile.mkdtemp())
     source = tmp / "DemoController.java"
     source.write_text(

@@ -256,6 +256,11 @@ def _infer_kind(name: str, annotations: list[str], body_anns: list[str] = []) ->
         'RestController', 'FeignClient', 'KafkaListener', 'Scheduled',
         'EventListener', 'Endpoint', 'Controller', 'Repository', 'Service',
     ]
+    # A generic @Service/@Component whose methods are @KafkaListener is a consumer
+    # (the class annotation only tells Spring to instantiate it).
+    if 'KafkaListener' in body_anns and not any(
+            a in annotations for a in ('RestController', 'Controller', 'FeignClient', 'Repository')):
+        return 'CONSUMER', '@KafkaListener on method'
     for ann in PRIORITY:
         if ann in annotations:
             return ROLE_ANNOTATIONS[ann], f'@{ann} annotation'
@@ -570,12 +575,16 @@ def parse_file(path: Path, skip_annotation_defs: bool = False) -> Optional[Compo
 
     # Extract non-HTTP entrypoints: @Scheduled, @KafkaListener, @EventListener methods
     comp.non_http_entrypoints = _extract_non_http_entrypoints(text, class_pos)
+    # A @KafkaListener reads from Kafka even when no KafkaTemplate is injected
+    if any(e.kind == 'KAFKA' for e in comp.non_http_entrypoints) and 'kafka' not in comp.external_systems:
+        comp.external_systems.append('kafka')
 
     return comp
 
 
 _NON_HTTP_METHOD_RE = re.compile(
     r'@(Scheduled|KafkaListener|EventListener)\s*(?:\([^)]*\))?\s*'
+    r'(?:@\w+(?:\.\w+)*\s*(?:\([^)]*\))?\s*)*'   # other annotations, e.g. @SchedulerLock(...)
     r'(?:override\s+|open\s+|internal\s+)*(?:fun|public\s+\w[\w\s]*)\s+(\w+)\s*\(',
     re.DOTALL,
 )
@@ -588,9 +597,15 @@ def _extract_non_http_entrypoints(text: str, class_pos: int) -> list[NonHttpEntr
         # Try to extract topic/cron from annotation value
         ann_text = m.group(0)
         detail = ''
-        val_m = re.search(r'\(\s*(?:topics?\s*=\s*)?["\']([^"\']+)["\']', ann_text)
+        # topics = "a" | topics = ["a"] | topics = {"a"} | "a" | cron = "…" | fixedRate = 600000
+        val_m = re.search(
+            r'\(\s*(?:(?:topics?|value|cron)\s*=\s*)?[\[{]?\s*["\']([^"\']+)["\']', ann_text)
         if val_m:
             detail = val_m.group(1)
+        else:
+            rate_m = re.search(r'\b(fixedRate|fixedDelay|cron)\s*=\s*([\w.]+)', ann_text)
+            if rate_m:
+                detail = f'{rate_m.group(1)}={rate_m.group(2)}'
         kind_map = {'Scheduled': 'SCHEDULED', 'KafkaListener': 'KAFKA', 'EventListener': 'EVENT'}
         result.append(NonHttpEntrypoint(kind=kind_map[ann], method=method, detail=detail))
     return result

@@ -3,6 +3,67 @@ from dataclasses import dataclass, field as dc_field
 from typing import Optional
 
 from .model import Component
+from .scan import EXTERNAL_HINTS
+
+
+# Suffixes that suggest an external service boundary rather than a utility type
+_EXTERNAL_SUFFIXES = ('Service', 'Client', 'Gateway', 'Adapter', 'Api', 'Provider')
+_NOISE_TYPES = frozenset({
+    'String', 'Integer', 'Long', 'Boolean', 'List', 'Map', 'Set', 'Optional',
+    'ObjectMapper', 'Logger', 'Duration', 'Cache', 'AtomicBoolean', 'BiConsumer',
+    'DataSource', 'Environment', 'ApplicationAvailability',
+    # Kotlin built-ins (often injected via @Value constructor params)
+    'Int', 'Short', 'Byte', 'Char', 'Double', 'Float', 'Any', 'Unit',
+    'MutableList', 'MutableMap', 'MutableSet', 'Collection', 'Iterable',
+})
+# Known library/framework types → canonical external system label
+_KNOWN_TYPES: dict[str, str] = {
+    'CloseableHttpClient': 'http',
+    'HttpClient': 'http',
+    'OkHttpClient': 'http',
+    'RestTemplate': 'http',
+    'WebClient': 'http',
+    'RestClient': 'http',
+    'ElasticsearchClient': 'elasticsearch',
+    'RestHighLevelClient': 'elasticsearch',
+    'OpenSearchClient': 'opensearch',
+}
+# Prefixes to strip before label generation (project-specific noise)
+_LABEL_DROP_PREFIXES = ('API', 'Api', 'Monthly')
+
+def external_label_for_type(name: str) -> Optional[str]:
+    """Convert unresolved type name to a kebab-case external system label, or None."""
+    if name in _NOISE_TYPES:
+        return None
+    if name in _KNOWN_TYPES:
+        return _KNOWN_TYPES[name]
+    for suffix in _EXTERNAL_SUFFIXES:
+        if name.endswith(suffix):
+            prefix = name[:-len(suffix)]
+            if not prefix:
+                return None
+            for dp in _LABEL_DROP_PREFIXES:
+                if prefix.startswith(dp) and len(prefix) > len(dp):
+                    prefix = prefix[len(dp):]
+            label = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', prefix).lower()
+            if label.count('-') >= 3:
+                return None
+            return label
+    return None
+
+
+def external_labels_for_type(name: str) -> list[str]:
+    """All external system labels a single type name implies.
+
+    Combines the library-type hints used at scan time (KafkaTemplate → kafka,
+    NamedParameterJdbcTemplate → database, …) with the name-based heuristic
+    applied to unresolved dependencies (StripeClient → stripe).
+    """
+    labels = [label for pattern, label in EXTERNAL_HINTS if re.search(pattern, name)]
+    extra = external_label_for_type(name)
+    if extra and extra not in labels:
+        labels.append(extra)
+    return labels
 
 
 @dataclass
@@ -11,58 +72,18 @@ class ResolveDiagnostics:
     dropped: list[dict] = dc_field(default_factory=list)      # {comp, type, reason}
     ambiguous: list[dict] = dc_field(default_factory=list)    # {comp, type, implementations}
     no_field_calls: list[str] = dc_field(default_factory=list)  # endpoint handler names
-    unreachable: list[str] = dc_field(default_factory=list)   # component names not reachable from any endpoint
+    unreachable: list[str] = dc_field(default_factory=list)   # component names not reachable from any entrypoint
 
 
 def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostics] = None) -> dict[str, str]:
-    """Returns iface_map: interface name → single concrete implementation name (where unambiguous)."""
     """Trim dependency lists to only reference other known components.
+
     Also resolves interface names to their implementations via FooImpl heuristic.
-    Unresolvable dependencies that look like external clients are added as external systems."""
+    Unresolvable dependencies that look like external clients are added as external systems.
+    Returns iface_map: interface name → single concrete implementation name (where unambiguous).
+    """
     known = {c.name for c in components}
     diag = diagnostics  # may be None
-
-    # Suffixes that suggest an external service boundary rather than a utility type
-    _EXTERNAL_SUFFIXES = ('Service', 'Client', 'Gateway', 'Adapter', 'Api', 'Provider')
-    _NOISE_TYPES = frozenset({
-        'String', 'Integer', 'Long', 'Boolean', 'List', 'Map', 'Set', 'Optional',
-        'ObjectMapper', 'Logger', 'Duration', 'Cache', 'AtomicBoolean', 'BiConsumer',
-        'DataSource', 'Environment', 'ApplicationAvailability',
-    })
-    # Known library/framework types → canonical external system label
-    _KNOWN_TYPES: dict[str, str] = {
-        'CloseableHttpClient': 'http',
-        'HttpClient': 'http',
-        'OkHttpClient': 'http',
-        'RestTemplate': 'http',
-        'WebClient': 'http',
-        'RestClient': 'http',
-        'ElasticsearchClient': 'elasticsearch',
-        'RestHighLevelClient': 'elasticsearch',
-        'OpenSearchClient': 'opensearch',
-    }
-    # Prefixes to strip before label generation (project-specific noise)
-    _LABEL_DROP_PREFIXES = ('API', 'Api', 'Monthly')
-
-    def _to_external_label(name: str) -> Optional[str]:
-        """Convert unresolved type name to a kebab-case external system label, or None."""
-        if name in _NOISE_TYPES:
-            return None
-        if name in _KNOWN_TYPES:
-            return _KNOWN_TYPES[name]
-        for suffix in _EXTERNAL_SUFFIXES:
-            if name.endswith(suffix):
-                prefix = name[:-len(suffix)]
-                if not prefix:
-                    return None
-                for dp in _LABEL_DROP_PREFIXES:
-                    if prefix.startswith(dp) and len(prefix) > len(dp):
-                        prefix = prefix[len(dp):]
-                label = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', prefix).lower()
-                if label.count('-') >= 3:
-                    return None
-                return label
-        return None
 
     # Build interface→implementations map from explicit `implements` declarations
     _iface_map: dict[str, list[str]] = {}
@@ -92,10 +113,11 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
             if r in known and r != comp.name:
                 resolved.append(r)
             elif r not in known:
-                label = _to_external_label(d)
+                label = external_label_for_type(d)
                 if label and label not in comp.external_systems:
                     comp.external_systems.append(label)
-                elif diag is not None and not label and d not in _NOISE_TYPES:
+                elif (diag is not None and not label and d not in _NOISE_TYPES
+                      and not any(re.search(pat, d) for pat, _ in EXTERNAL_HINTS)):
                     diag.dropped.append({'comp': comp.name, 'type': d, 'reason': 'unresolved — not a known component or external pattern'})
         comp.dependencies = list(dict.fromkeys(resolved))
 
@@ -105,14 +127,11 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
                 diag.no_field_calls.append(f'{comp.name}.{ep.handler}  {ep.http_method} {ep.path}')
 
     if diag is not None:
-        # Components not reachable from any endpoint (via BFS through dependencies)
-        reachable: set[str] = set()
+        # Components not reachable from any entrypoint (via BFS through dependencies).
+        # Entrypoints are HTTP endpoints plus @Scheduled / @KafkaListener / @EventListener
+        # methods — a nightly job's dependencies are not dead code.
         by_name = {c.name: c for c in components}
-        queue = [ep_comp.name
-                 for ep_comp in components if ep_comp.endpoints
-                 for _ in ep_comp.endpoints]
-        # BFS from all controllers
-        frontier = [c.name for c in components if c.endpoints]
+        frontier = [c.name for c in components if c.endpoints or c.non_http_entrypoints]
         visited: set[str] = set(frontier)
         while frontier:
             nxt = []
@@ -125,7 +144,7 @@ def resolve(components: list[Component], diagnostics: Optional[ResolveDiagnostic
         reachable = visited
         diag.unreachable = [
             c.name for c in components
-            if c.name not in reachable and c.kind not in ('CONFIG',) and not c.endpoints
+            if c.name not in reachable and c.kind not in ('CONFIG',)
         ]
 
     # Return flat iface → impl map (only unambiguous entries)
@@ -178,7 +197,7 @@ def format_diagnostics(diag: ResolveDiagnostics) -> str:
         lines.append('')
 
     if diag.unreachable:
-        lines.append('  UNREACHABLE COMPONENTS  (not connected to any endpoint)')
+        lines.append('  UNREACHABLE COMPONENTS  (not connected to any endpoint, job or listener)')
         for name in diag.unreachable:
             lines.append(f'    {name}')
         lines.append('')
