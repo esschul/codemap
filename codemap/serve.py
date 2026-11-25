@@ -47,7 +47,7 @@ def _generate_landing_page(serve_dir: Path) -> None:
           <div class="lp-card-ts">Scanned {_fmt_ts(p.get('ts', 0))}</div>
         </a>'''
 
-    empty = '<div class="lp-empty">No projects scanned yet.<br>Run springmap with <code>--name &lt;slug&gt;</code> to add one.</div>' if not projects else ''
+    empty = '<div class="lp-empty">No projects scanned yet.<br>Run codemap with <code>--name &lt;slug&gt;</code> to add one.</div>' if not projects else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
